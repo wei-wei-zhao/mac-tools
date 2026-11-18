@@ -65,7 +65,6 @@ final class ClipStore: ObservableObject {
                 self.items.insert(ClipItem(text: text, date: Date()), at: 0)
             }
             self.trim()
-            self.objectWillChange.send()
             self.save()
         }
     }
@@ -88,20 +87,17 @@ final class ClipStore: ObservableObject {
         } else {
             items.removeAll()
         }
-        objectWillChange.send()
         save()
     }
 
     func remove(_ item: ClipItem) {
-        items.removeAll { $0.id == item.id }
-        objectWillChange.send()
+        items = items.filter { $0.id != item.id }
         save()
     }
 
     func togglePin(_ item: ClipItem) {
         guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
         items[idx].isPinned.toggle()
-        objectWillChange.send()
         save()
     }
 
@@ -110,7 +106,6 @@ final class ClipStore: ObservableObject {
         var it = items.remove(at: idx)
         it.date = Date()
         items.insert(it, at: 0)
-        objectWillChange.send()
         save()
     }
 
@@ -213,31 +208,103 @@ final class ClipMonitor {
 // MARK: - 粘贴到当前焦点位置
 
 final class Paster {
-    static func pasteFromClipboard() {
-        guard let src = CGEventSource(stateID: .combinedSessionState) else { return }
-        let vKey: CGKeyCode = 9 // kVK_ANSI_V
-        let down = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: true)
-        let up = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: false)
-        down?.flags = .maskCommand
-        up?.flags = .maskCommand
-        down?.post(tap: .cghidEventTap)
-        usleep(12_000)
-        up?.post(tap: .cghidEventTap)
+    /// 向系统投递 ⌘V（HID 层，实测 TextEdit/原生 App 可正常接收）
+    @discardableResult
+    /// 向系统投递 ⌘V
+    static func pasteFromClipboard() -> Bool {
+        guard let src = CGEventSource(stateID: .hidSystemState),
+              let down = CGEvent(keyboardEventSource: src, virtualKey: 9, keyDown: true),
+              let up = CGEvent(keyboardEventSource: src, virtualKey: 9, keyDown: false) else {
+            return false
+        }
+        down.flags = .maskCommand
+        up.flags = .maskCommand
+        down.post(tap: .cghidEventTap)
+        usleep(30_000)
+        up.post(tap: .cghidEventTap)
+        return true
     }
 
-    /// 通过剪贴板通道粘贴，之后把用户原来的剪贴板内容还原
-    static func paste(_ text: String, monitor: ClipMonitor) {
-        let original = NSPasteboard.general.string(forType: .string)
-        monitor.writeToPasteboard(text)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+    /// 直接往目标 App 的焦点控件里插入文本（不依赖键盘事件，最可靠）
+    /// 优先用 kAXSelectedText 插入；失败再回落 AXValue 追加
+    static func insertViaAX(_ text: String, into app: NSRunningApplication) -> Bool {
+        func trace(_ m: String) {
+            NSLog("ClipStack[AX]: %@", m)
+        }
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        var focused: CFTypeRef?
+        let ev = AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString, &focused)
+        guard ev == .success, let el = focused else {
+            trace("取焦点元素失败 err=\(ev.rawValue) pid=\(app.processIdentifier) name=\(app.localizedName ?? "?")")
+            return false
+        }
+        let element = el as! AXUIElement
+        var role: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+        trace("焦点元素 role=\(role ?? "nil" as CFTypeRef)")
+
+        let e1 = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
+        trace("SetSelectedText err=\(e1.rawValue)")
+        if e1 == .success { return true }
+
+        var cur: CFTypeRef?
+        let rv = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &cur)
+        trace("读 AXValue err=\(rv.rawValue) 现有长度=\((cur as? String)?.count ?? -1)")
+        if rv == .success {
+            let old = (cur as? String) ?? ""
+            let e2 = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, (old + text) as CFTypeRef)
+            trace("SetAXValue err=\(e2.rawValue)")
+            if e2 == .success { return true }
+        }
+        return false
+    }
+
+    /// 通过剪贴板通道粘贴：写剪贴板 → 等目标回前台 → 投 ⌘V → 等目标读完 → 还原原剪贴板
+    static func paste(_ text: String, monitor: ClipMonitor, target: NSRunningApplication?, attempt: Int = 0) {
+        let original = originalClipboard
+        func trace(_ m: String) {
+            NSLog("ClipStack[paste]: %@", m)
+        }
+        trace("paste 开始 text=\(text.prefix(16)) front=\(NSWorkspace.shared.frontmostApplication?.localizedName ?? "nil") target=\(target?.localizedName ?? "nil")")
+
+        // 确认目标 App 已回到前台（最多重试 20 次 ≈ 1 秒）
+        let front = NSWorkspace.shared.frontmostApplication
+        let ours = Bundle.main.bundleIdentifier
+        if let target = target, front?.bundleIdentifier != target.bundleIdentifier,
+           front?.bundleIdentifier == ours, attempt < 20 {
+            target.activate(options: [])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                paste(text, monitor: monitor, target: target, attempt: attempt + 1)
+            }
+            return
+        }
+
+        // 目标已就位
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+            // 方案 A：AX 直接插入 —— 完全不碰剪贴板，天然不污染"最近一条"
+            let dest = target ?? NSWorkspace.shared.frontmostApplication
+            if let d = dest, insertViaAX(text, into: d) {
+                trace("✅ AX 插入成功，剪贴板未改动")
+                originalClipboard = nil
+                return
+            }
+
+            // 方案 B：走剪贴板 + 合成 ⌘V，之后再还原
+            trace("AX 失败，改用剪贴板通道")
+            monitor.writeToPasteboard(text)
             pasteFromClipboard()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            // 关键：给目标 App 足够时间去读剪贴板，再还原（实测 <1s 会被抢先）
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                 if let original = original, !original.isEmpty {
                     monitor.writeToPasteboard(original)
                 }
+                originalClipboard = nil
             }
         }
     }
+
+    /// 用户原来的剪贴板内容，粘贴前记下来
+    static var originalClipboard: String?
 }
 
 // MARK: - 面板（NSPanel + SwiftUI）
@@ -255,7 +322,7 @@ final class KeyPanel: NSPanel {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { onEsc?(); return }
+        if PanelController.shared.handleKey(event) { return }
         super.keyDown(with: event)
     }
 }
@@ -268,20 +335,69 @@ final class PanelController {
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
+    private var keyMonitor: Any?
+    /// 由 ClipListView 注入的操作句柄
+    var moveSelection: (Int) -> Void = { _ in }
+    var confirmSelection: () -> Void = {}
+    var deleteSelection: () -> Void = {}
+    var selectAndPaste: (Int) -> Void = { _ in }
+    var searchFocused: Bool = false
+
     func toggle() {
         if isVisible { hide() } else { show() }
+    }
+
+    /// 面板可见时用本地事件监听器接管键盘（borderless 面板 firstResponder 不可靠）
+    private func installKeyMonitor() {
+        removeKeyMonitor()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self, self.isVisible else { return event }
+            // 搜索框有焦点时不拦截，让用户正常打字
+            if self.searchFocused { return event }
+            return self.handleKey(event) ? nil : event
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+    }
+
+    /// 返回 true 表示已消费该按键
+    func handleKey(_ event: NSEvent) -> Bool {
+        guard let p = panel, p.isVisible else { return false }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        switch event.keyCode {
+        case 53: hide(); return true                       // Esc
+        case 126: moveSelection(-1); return true         // ↑
+        case 125: moveSelection(1); return true          // ↓
+        case 36, 76: confirmSelection(); return true     // ⏎
+        case 51:
+            if flags.contains(.option) { deleteSelection(); return true }
+        default: break
+        }
+        if flags.isEmpty, let ch = event.charactersIgnoringModifiers,
+           let n = Int(ch), n >= 1, n <= 9 {
+            selectAndPaste(n - 1)
+            return true
+        }
+        return false
     }
 
     func show() {
         activeMonitor = MonitorRef.shared.monitor
         previousApp = NSWorkspace.shared.frontmostApplication
+        // 记下用户原来的剪贴板，粘贴后还原
+        Paster.originalClipboard = NSPasteboard.general.string(forType: .string)
 
         let view = ClipListView(onPick: { [weak self] text in
-            // 先收起面板并还原焦点，再往原焦点粘贴
-            self?.hide(restoreFocus: true)
-            guard let mon = self?.activeMonitor else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
-                Paster.paste(text, monitor: mon)
+            NSLog("ClipStack[onPick-TEST]: 收到 \(text.prefix(20))")
+            if ProcessInfo.processInfo.environment["CS_TEST_MODE"] != "1" {
+                self?.hide(restoreFocus: true)
+                guard let mon = self?.activeMonitor else { return }
+                let target = self?.previousApp
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    Paster.paste(text, monitor: mon, target: target)
+                }
             }
         }, onClose: { [weak self] in self?.hide() })
 
@@ -297,7 +413,7 @@ final class PanelController {
             let rect = NSRect(origin: .zero, size: size)
             // 用 borderless 才能让 SwiftUI 的圆角真正生效，也不会多出一条标题栏
             p = KeyPanel(contentRect: rect,
-                         styleMask: [.borderless, .nonactivatingPanel],
+                         styleMask: [.borderless],
                          backing: .buffered, defer: false)
             p.isFloatingPanel = true
             p.level = .screenSaver // 置顶显示，浮在所有普通窗口之上
@@ -312,33 +428,38 @@ final class PanelController {
             panel = p
         }
 
-        // 直接用鼠标所在的逻辑坐标定位（不走 CoreGraphics 换算，避免多屏坐标错位）
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
-            ?? NSScreen.main
-            ?? NSScreen.screens[0]
-        let sf = screen.visibleFrame
-        var x = mouse.x - size.width / 2
-        var y = mouse.y - size.height - 12
-        // 上方空间不够就放到鼠标下方
-        if y < sf.minY + 10 { y = mouse.y + 24 }
-        x = max(sf.minX + 10, min(x, sf.maxX - size.width - 10))
-        y = max(sf.minY + 10, min(y, sf.maxY - size.height - 10))
+        // 固定显示在「非主屏」的右上角，避免遮挡主屏办公区
+        let targetScreen = NSScreen.screens.first { $0 != NSScreen.main } ?? NSScreen.main!
+        let sf = targetScreen.visibleFrame
+        let x = sf.maxX - size.width - 16
+        let y = sf.maxY - size.height - 16
         p.setFrame(NSRect(x: x.rounded(), y: y.rounded(),
                           width: size.width, height: size.height), display: true)
 
-        NSApp.activate(ignoringOtherApps: true)
-        p.makeKeyAndOrderFront(nil)
-        p.orderFrontRegardless()
+        // 用 NSRunningApplication 激活自己（比 NSApp.activate 在 accessory 模式下更可靠）
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+        installKeyMonitor()
+        // 顺序很重要：先激活 App，再 makeKeyAndOrderFront，面板才能成为 key window
+        NSApp.setActivationPolicy(.regular)
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+        DispatchQueue.main.async {
+            p.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+
         // 强制重绘一帧，避免首次显示空白
         hosting.needsLayout = true
         hosting.needsDisplay = true
     }
 
     func hide(restoreFocus: Bool = false) {
+        removeKeyMonitor()
         panel?.orderOut(nil)
-        if restoreFocus, let app = previousApp, app.bundleIdentifier != Bundle.main.bundleIdentifier {
+        guard restoreFocus else { return }
+        // 关键：把自己的激活状态让出去，否则 ⌘V 会发到 ClipStack 自己身上
+        if let app = previousApp, app.bundleIdentifier != Bundle.main.bundleIdentifier {
             app.activate(options: [])
+            NSApp.deactivate()
         }
     }
 }
@@ -361,6 +482,11 @@ struct ClipListView: View {
 
     private var results: [ClipItem] { store.search(query) }
 
+    /// 带序号的快照，供列表渲染与点击使用
+    private var rows: [(index: Int, item: ClipItem)] {
+        results.enumerated().map { (index: $0.offset, item: $0.element) }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -375,10 +501,28 @@ struct ClipListView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
         )
+        .background(
+            KeyCatcher(
+                onUp: { move(-1) },
+                onDown: { move(1) },
+                onEnter: { pick(sel) },
+                onEsc: { onClose() },
+                onCmd: { n in pick(n) },
+                onDelete: { deleteSelected() }
+            )
+        )
         .onAppear {
             query = ""
             sel = 0
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
+            // 把操作句柄交给 PanelController，供本地事件监听器调用
+            let c = PanelController.shared
+            c.moveSelection = { d in sel = (sel + d + max(results.count, 1)) % max(results.count, 1) }
+            c.confirmSelection = { pick(sel) }
+            c.deleteSelection = { deleteSelected() }
+            c.selectAndPaste = { n in pick(n) }
+            // 不自动聚焦搜索框：让数字键/方向键直接作用于列表。
+            // 用户手动点击搜索框时才开始输入并筛选。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { searchFocused = false }
         }
     }
 
@@ -389,10 +533,12 @@ struct ClipListView: View {
                 .foregroundStyle(.secondary)
             TextField("搜索历史…", text: $query)
                 .textFieldStyle(.plain)
+                .onTapGesture { searchFocused = true }
                 .font(.system(size: 13.5))
                 .focused($searchFocused)
                 .onSubmit { pick(sel) }
                 .onChange(of: query) { _, _ in sel = 0 }
+                .onChange(of: searchFocused) { _, v in PanelController.shared.searchFocused = v }
             if !query.isEmpty {
                 Button {
                     query = ""
@@ -426,34 +572,27 @@ struct ClipListView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 2) {
-                        ForEach(Array(results.enumerated()), id: \.element.id) { idx, item in
-                            ClipRow(item: item, index: idx, selected: idx == sel)
+                        ForEach(rows, id: \.item.id) { row in
+                            ClipRow(item: row.item, index: row.index, selected: row.index == sel)
                                 .contentShape(Rectangle())
-                                .onTapGesture { pick(idx) }
-                                .onHover { h in if h { sel = idx } }
-                                .id(item.id)
+                                // 直接闭包捕获文本，不在点击时回查数组（避免状态失效崩溃）
+                                .onTapGesture { pickText(row.item.text) }
+                                .onHover { h in if h { sel = row.index } }
+                                .id(row.item.id)
                         }
                     }
                     .padding(.vertical, 6)
                     .padding(.horizontal, 8)
                 }
                 .onChange(of: sel) { _, new in
-                    if results.indices.contains(new) {
+                    let items = rows
+                    if items.indices.contains(new) {
                         withAnimation(.easeOut(duration: 0.1)) {
-                            proxy.scrollTo(results[new].id, anchor: .center)
+                            proxy.scrollTo(items[new].item.id, anchor: .center)
                         }
                     }
                 }
-                .background(
-                    KeyCatcher(
-                        onUp: { move(-1) },
-                        onDown: { move(1) },
-                        onEnter: { pick(sel) },
-                        onEsc: { onClose() },
-                        onCmd: { n in pick(n) },
-                        onDelete: { deleteSelected() }
-                    )
-                )
+
             }
         }
     }
@@ -482,12 +621,26 @@ struct ClipListView: View {
         sel = (sel + d + results.count) % results.count
     }
 
+    /// 直接用文本触发，不依赖数组下标
+    private func pickText(_ text: String) {
+        NSLog("ClipStack[pickText]: \(text.prefix(24))")
+        DispatchQueue.main.async { [onPick] in
+            onPick(text)
+        }
+    }
+
     private func pick(_ index: Int) {
-        guard results.indices.contains(index) else { return }
-        let item = results[index]
-        // 不改变历史顺序，只更新该条时间与“最近使用”顺序展示由 store 决定
-        if index != 0 { store.moveToTop(item.text) }
-        onPick(item.text)
+        let snapshot = results
+        guard snapshot.indices.contains(index) else { return }
+        let text = snapshot[index].text
+        // 关键：不能在 SwiftUI 的事件处理内同步 orderOut 面板，
+        // 否则视图树在渲染中途被销毁 → AttributeGraph 环 + 崩溃。
+        // 统一推到下一轮 runloop 再执行。
+        NSLog("ClipStack[pick]: 选中 \(text.prefix(20))")
+        DispatchQueue.main.async {
+            NSLog("ClipStack[pick]: 调用 onPick")
+            onPick(text)
+        }
     }
 
     private func deleteSelected() {
@@ -573,7 +726,20 @@ struct KeyCatcher: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            window?.makeFirstResponder(self)
+            grabFocus()
+        }
+
+        /// 延后多次尝试抢焦点，确保面板激活后按键能进来
+        func grabFocus(retry: Int = 0) {
+            guard let w = window else { return }
+            if w.firstResponder !== self {
+                w.makeFirstResponder(self)
+            }
+            if retry < 5 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
+                    self?.grabFocus(retry: retry + 1)
+                }
+            }
         }
 
         /// borderless 面板不会自动派发 cancelOperation，这里手动接住 Esc
@@ -593,7 +759,8 @@ struct KeyCatcher: NSViewRepresentable {
                 if flags.contains(.option) { onDelete(); return }
             default: break
             }
-            if flags.contains(.command),
+            // 直接按数字键 = 选中并粘贴第 N 条（无需 Cmd）
+            if flags.isEmpty || flags == .numericPad,
                let ch = event.charactersIgnoringModifiers,
                let n = Int(ch), n >= 1, n <= 9 {
                 onCmd(n - 1)

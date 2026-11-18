@@ -19,10 +19,36 @@
 1. **每次复制都入库**：0.3 秒轮询 `NSPasteboard.changeCount`，文本类内容全部记录。
 2. **`Cmd+V` 永远是最近一条**：系统原生剪贴板通道，不做任何拦截。
 3. **`Shift+Cmd+C` 显示历史**（再按一次收起；`Shift+Cmd+V` 作为兼容键也保留）：Carbon 全局热键，不占系统辅助功能权限即生效。
-4. **选中即粘贴到原焦点位置**：面板 `orderOut` → 还原上一个 App 焦点 → 发 `Cmd+V`。
+4. **选中即粘贴到原焦点位置**：通过辅助功能 API（`AXSelectedText`）直接写入目标输入框，
+   完全不经过剪贴板，所以不会污染「最近一条」。失败时回落到剪贴板通道 + 合成 `⌘V`。
 5. **不改变历史顺序**：同一个文本再次复制只更新时间戳，不新增条目；
    选中历史粘贴**不会**把它顶到列表首位，也不会污染"最近一条"——粘贴完成后自动还原原剪贴板内容。
 6. **置顶**：目前 UI 未暴露入口，数据结构已支持（`isPinned`），清空时保留置顶项。
+
+## 权限与签名（重要）
+
+ClipStack 需要「辅助功能」权限才能往其他 App 输入框写入文字。
+
+⚠️ **签名方式必须是固定证书**，不能是 ad-hoc：
+
+```bash
+# 正确：绑定证书，重新编译也不会失效
+codesign --force --sign "ClipStack Local Signing" --identifier com.tal.ClipStack ClipStack.app
+
+# 错误：ad-hoc 签名，每次重新编译 CDHash 都变，权限立刻失效
+codesign --force --sign - --identifier com.tal.ClipStack ClipStack.app
+```
+
+验证绑定的是证书而非文件哈希：
+
+```bash
+codesign -dr - /Applications/ClipStack.app
+# 应输出：designated => identifier "com.tal.ClipStack" and certificate leaf = H"..."
+```
+
+## 面板位置
+
+固定显示在**非主屏**的右上角，避免遮挡主屏办公区。单屏时回落到主屏。
 
 ## 数据
 

@@ -6,7 +6,7 @@
 
 | 工具 | 语言 | 用途 | 状态 |
 |---|---|---|---|
-| [ClipStack](ClipStack/) | Swift | 剪贴板历史：`⌘V` 粘贴最近一条，`⇧⌘C` 唤起/关闭历史面板，选中即粘到原位置 | 可用 |
+| [ClipStack](ClipStack/) | Swift | 剪贴板历史：`⌘V` 粘贴最近一条，`⇧⌘C` 唤起/关闭面板，选中即粘到原位置（面板固定在外接屏右上角） | 可用 |
 | [WiFiDrop](WiFiDrop/) | Python | 局域网互传：手机浏览器和 Mac 双向传文件、同步文字 | 可用 |
 
 ## ClipStack
