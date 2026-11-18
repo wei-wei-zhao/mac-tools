@@ -1,6 +1,7 @@
 import Cocoa
 import Carbon.HIToolbox
 import SwiftUI
+import ServiceManagement
 
 // MARK: - 数据模型
 
@@ -713,6 +714,9 @@ struct SettingsView: View {
             Section("启动") {
                 Toggle("开机自动启动", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, v in LaunchAtLogin.set(v) }
+                Text(LaunchAtLogin.statusText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
             Section("快捷键") {
                 Text("Shift + Command + C  唤起 / 关闭历史面板")
@@ -739,37 +743,102 @@ struct SettingsView: View {
 
 // MARK: - 开机自启
 
+/// macOS 13+ 用官方 SMAppService；旧系统或注册失败时降级到 LaunchAgent。
+/// 全部路径都无需管理员权限。
 enum LaunchAtLogin {
     static let label = "com.tal.ClipStack"
 
-    static var plistURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents/\(label).plist")
+    private static var agentsDir: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
     }
 
+    private static var agentsWritable: Bool {
+        let probe = agentsDir.appendingPathComponent(".clipstack_probe")
+        let ok = (try? Data([0]).write(to: probe)) != nil
+        try? FileManager.default.removeItem(at: probe)
+        return ok
+    }
+
+    static var plistURL: URL {
+        agentsDir.appendingPathComponent("\(label).plist")
+    }
+
+    /// 以系统真实状态为准，不只看 UserDefaults
     static var isEnabled: Bool {
-        FileManager.default.fileExists(atPath: plistURL.path)
+        if #available(macOS 13.0, *), SMAppService.mainApp.status == .enabled { return true }
+        return FileManager.default.fileExists(atPath: plistURL.path)
     }
 
     static func set(_ on: Bool) {
-        let fm = FileManager.default
-        if on {
-            let exe = Bundle.main.executablePath ?? "/Applications/ClipStack.app/Contents/MacOS/ClipStack"
-            let dict: [String: Any] = [
-                "Label": label,
-                "ProgramArguments": [exe],
-                "RunAtLoad": true,
-                "KeepAlive": false,
-                "ProcessType": "Interactive"
-            ]
-            if let data = try? PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0) {
-                try? fm.createDirectory(at: plistURL.deletingLastPathComponent(),
-                                        withIntermediateDirectories: true)
-                try? data.write(to: plistURL, options: .atomic)
-            }
-        } else {
-            try? fm.removeItem(at: plistURL)
+        if on { install() } else { uninstall() }
+        UserDefaults.standard.set(on, forKey: "launchAtLogin")
+    }
+
+    private static func install() {
+        // 方式 1：SMAppService（macOS 13+ 官方登录项，最可靠）
+        if #available(macOS 13.0, *) {
+            let svc = SMAppService.mainApp
+            if svc.status != .enabled {
+                do {
+                    try svc.register()
+                    NSLog("ClipStack: SMAppService 注册成功")
+                    return
+                } catch {
+                    NSLog("ClipStack: SMAppService 注册失败 -> \(error.localizedDescription)")
+                }
+            } else { return }
         }
+
+        // 方式 2：LaunchAgent（旧系统 / SMAppService 失败时）
+        guard agentsWritable else {
+            NSLog("ClipStack: LaunchAgents 目录不可写，无法启用开机自启")
+            return
+        }
+        let exe = Bundle.main.executablePath ?? "/Applications/ClipStack.app/Contents/MacOS/ClipStack"
+        let dict: [String: Any] = [
+            "Label": label,
+            "ProgramArguments": [exe],
+            "RunAtLoad": true,
+            "KeepAlive": false,
+            "ProcessType": "Interactive",
+            "LimitLoadToSessionType": "Aqua"
+        ]
+        if let data = try? PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0) {
+            try? data.write(to: plistURL, options: .atomic)
+            run("/bin/launchctl", ["bootstrap", "gui/\(getuid())", plistURL.path])
+        }
+    }
+
+    private static func uninstall() {
+        if #available(macOS 13.0, *), SMAppService.mainApp.status == .enabled {
+            try? SMAppService.mainApp.unregister()
+        }
+        run("/bin/launchctl", ["bootout", "gui/\(getuid())/\(label)"])
+        try? FileManager.default.removeItem(at: plistURL)
+    }
+
+    @discardableResult
+    private static func run(_ path: String, _ args: [String]) -> Int32 {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: path)
+        p.arguments = args
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do { try p.run(); p.waitUntilExit(); return p.terminationStatus } catch { return -1 }
+    }
+
+    static var statusText: String {
+        if #available(macOS 13.0, *) {
+            switch SMAppService.mainApp.status {
+            case .enabled: return "已开启（系统登录项）"
+            case .requiresApproval: return "需在「系统设置 → 通用 → 登录项」里允许"
+            case .notFound: break  // ad-hoc 签名的 app 无法注册，继续看降级路径
+            case .notRegistered: break
+            @unknown default: break
+            }
+        }
+        if FileManager.default.fileExists(atPath: plistURL.path) { return "已开启（LaunchAgent）" }
+        return "未开启 · 需手动加入「系统设置 → 通用 → 登录项」"
     }
 }
 
@@ -817,6 +886,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         setupStatusItem()
+
+        // 首次启动默认开启开机自启
+        if !UserDefaults.standard.bool(forKey: "didInitLaunchAtLogin") {
+            UserDefaults.standard.set(true, forKey: "didInitLaunchAtLogin")
+            LaunchAtLogin.set(true)
+            NSLog("ClipStack: 首次启动，已尝试开启开机自启 -> \(LaunchAtLogin.statusText)")
+        }
+
         NSLog("ClipStack: 启动完成, hotkey id=\(hotkeyID)")
     }
 
