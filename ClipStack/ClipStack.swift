@@ -715,7 +715,7 @@ struct SettingsView: View {
                     .onChange(of: launchAtLogin) { _, v in LaunchAtLogin.set(v) }
             }
             Section("快捷键") {
-                Text("Shift + Command + V  打开历史面板")
+                Text("Shift + Command + C  唤起 / 关闭历史面板")
                 Text("Command + V  最近一条（系统原生）")
                     .foregroundStyle(.secondary)
             }
@@ -798,13 +798,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         monitor.start()
 
-        hotkeyID = HotKeyCenter.shared.register(keyCode: UInt32(kVK_ANSI_V),
-                                               modifiers: UInt32(cmdKey | shiftKey)) {
-            NSLog("ClipStack: 快捷键触发")
+        // 主热键：⇧⌘C —— 再按一次收起（toggle）
+        _ = HotKeyCenter.shared.register(keyCode: UInt32(kVK_ANSI_C),
+                                        modifiers: UInt32(cmdKey | shiftKey)) {
             DispatchQueue.main.async { PanelController.shared.toggle() }
         }
 
-        // 第二个热键 Ctrl+Option+Cmd+V 用于调试/兜底（macOS 26 上若 ⇧⌘V 被系统抢走可用这个）
+        // 兼容旧键：⇧⌘V 同样可以唤起/关闭
+        hotkeyID = HotKeyCenter.shared.register(keyCode: UInt32(kVK_ANSI_V),
+                                               modifiers: UInt32(cmdKey | shiftKey)) {
+            DispatchQueue.main.async { PanelController.shared.toggle() }
+        }
+
+        // 兜底热键：⌃⌥⌘V（若系统抢走了 ⇧⌘C/⇧⌘V 可用这个）
         _ = HotKeyCenter.shared.register(keyCode: UInt32(kVK_ANSI_V),
                                          modifiers: UInt32(cmdKey | optionKey | controlKey)) {
             DispatchQueue.main.async { PanelController.shared.toggle() }
@@ -819,10 +825,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let btn = item.button {
             btn.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "ClipStack")
             btn.image?.isTemplate = true
-            btn.toolTip = "ClipStack · Shift+Cmd+V"
+            btn.toolTip = "ClipStack · ⇧⌘C"
         }
         let menu = NSMenu()
-        menu.addItem(withTitle: "打开历史  ⇧⌘V", action: #selector(openPanel), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "唤起 / 关闭历史  ⇧⌘C", action: #selector(openPanel), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "清空（保留置顶）", action: #selector(clear), keyEquivalent: "").target = self

@@ -25,3 +25,7 @@ dist/
 # 临时文件
 *.log
 *.tmp
+
+# ClipStack 构建产物（用 ClipStack.swift 现编，不入库）
+ClipStack/ClipStack
+ClipStack/ClipStack.app/
