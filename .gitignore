@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller 产物
+build/
+dist/
+*.pkg
+
+# Swift 编译产物
+*.o
+*.dSYM/
+
+# 本地运行时配置（含个人路径）
+.wifidrop.json
+*.local.json
+
+# 临时文件
+*.log
+*.tmp

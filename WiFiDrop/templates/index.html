@@ -1,0 +1,1807 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="WiFiDrop">
+<meta name="theme-color" content="#f5f5f7">
+<title>WiFiDrop · 互传</title>
+<style>
+:root{
+  --bg:#f5f5f7;
+  --card:#ffffff;
+  --line:#e5e5ea;
+  --text:#1d1d1f;
+  --sub:#86868b;
+  --blue:#0071e3;
+  --green:#34c759;
+  --radius:16px;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro SC","PingFang SC","HarmonyOS Sans","Noto Sans CJK SC",sans-serif;
+  background:var(--bg);color:var(--text);
+  /* --nav-h 由 JS 实测底部导航高度后写入，再加一点余量，
+     保证最后一个文件不会被底部按钮挡住 */
+  padding:0 0 calc(var(--nav-h, 60px) + env(safe-area-inset-bottom) + 24px);
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:600px;margin:0 auto;padding:0 16px}
+
+/* 顶栏 */
+header{
+  position:sticky;top:0;z-index:50;
+  background:rgba(245,245,247,.82);
+  backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+  border-bottom:1px solid var(--line);
+  padding:calc(10px + env(safe-area-inset-top)) 0 10px;
+}
+header .wrap{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{display:flex;align-items:center;gap:9px;min-width:0}
+.logo{
+  width:32px;height:32px;border-radius:9px;flex:none;
+  background:linear-gradient(135deg,#0071e3,#5ac8fa);
+  display:grid;place-items:center;color:#fff;font-size:16px;font-weight:600;
+}
+.brand h1{font-size:17px;font-weight:600;letter-spacing:-.3px}
+.brand small{display:block;font-size:11px;color:var(--sub);font-weight:400;margin-top:1px}
+.status{
+  display:flex;align-items:center;gap:5px;flex:none;
+  font-size:12px;color:var(--green);font-weight:500;
+}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 0 0 rgba(52,199,89,.6);animation:pulse 2s infinite}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(52,199,89,.5)}
+  70%{box-shadow:0 0 0 6px rgba(52,199,89,0)}
+  100%{box-shadow:0 0 0 0 rgba(52,199,89,0)}
+}
+
+/* 设备数徽标（点击看设备列表） */
+.dev-badge{
+  display:flex;align-items:center;gap:5px;flex:none;
+  border:none;background:rgba(52,199,89,.12);
+  color:#248a3d;font-size:12px;font-weight:600;font-family:inherit;
+  padding:6px 11px;border-radius:100px;cursor:pointer;
+  transition:.15s;
+}
+.dev-badge:active{transform:scale(.95)}
+.dev-badge .dot{width:6px;height:6px}
+.dev-badge.only-self{background:rgba(142,142,147,.14);color:var(--sub)}
+.dev-badge.only-self .dot{background:var(--sub);animation:none}
+
+/* 卡片 */
+.card{
+  background:var(--card);border-radius:var(--radius);
+  margin-top:14px;overflow:hidden;
+  box-shadow:0 1px 3px rgba(0,0,0,.04),0 4px 16px rgba(0,0,0,.03);
+}
+.card-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 16px 10px;
+}
+.card-head h2{font-size:14px;font-weight:600;letter-spacing:-.2px}
+.card-head .hint{font-size:11px;color:var(--sub)}
+.card-body{padding:0 16px 16px}
+
+/* 上传区 */
+.drop{
+  border:2px dashed #d2d2d7;border-radius:12px;
+  padding:28px 16px;text-align:center;
+  transition:all .2s;cursor:pointer;
+  background:#fafafa;
+}
+.drop:active,.drop.hot{border-color:var(--blue);background:#f0f7ff;transform:scale(.99)}
+.drop .ico{font-size:30px;margin-bottom:8px;line-height:1}
+.drop .t{font-size:15px;font-weight:500;margin-bottom:4px}
+.drop .s{font-size:12px;color:var(--sub)}
+input[type=file]{display:none}
+
+/* 上传队列 */
+.queue{margin-top:12px;display:none}
+.queue.on{display:block}
+.qitem{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 0;border-bottom:1px solid var(--line);
+}
+.qitem:last-child{border-bottom:none}
+.qitem .nm{
+  flex:1;min-width:0;font-size:13px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.qitem .sz{font-size:11px;color:var(--sub);flex:none}
+.qitem .st{font-size:12px;flex:none;width:20px;text-align:center}
+.bar{height:3px;background:var(--line);border-radius:2px;margin-top:6px;overflow:hidden}
+.bar>i{display:block;height:100%;width:0;background:var(--blue);transition:width .2s}
+
+/* 文件列表 */
+.tabs{
+  display:flex;gap:6px;padding:0 16px 12px;overflow-x:auto;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch;
+}
+.tabs::-webkit-scrollbar{display:none}
+.tab{
+  flex:none;padding:6px 13px;border-radius:100px;
+  font-size:12.5px;background:#f5f5f7;color:var(--sub);
+  border:none;font-weight:500;transition:.15s;
+  font-family:inherit;
+}
+.tab.on{background:var(--text);color:#fff}
+
+.flist{padding:0 16px 8px}
+.group-head{
+  font-size:11.5px;color:var(--sub);font-weight:600;
+  padding:14px 0 6px;letter-spacing:.2px;
+  word-break:break-all;
+}
+
+/* ---------- 目录导航条 ---------- */
+.nav-bar{
+  display:flex;align-items:center;gap:8px;
+  padding:0 16px 10px;
+}
+.nav-up,.nav-refresh{
+  width:32px;height:32px;flex:none;
+  border:none;border-radius:9px;background:#f5f5f7;
+  color:var(--text);font-size:15px;font-family:inherit;
+  cursor:pointer;display:grid;place-items:center;
+}
+.nav-up:disabled{opacity:.3}
+.nav-up:active,.nav-refresh:active{transform:scale(.94)}
+.nav-path{
+  flex:1;min-width:0;font-size:12px;color:var(--sub);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  direction:rtl;text-align:left;
+  background:#f5f5f7;border-radius:8px;padding:7px 10px;
+  font-family:ui-monospace,Menlo,monospace;
+}
+
+/* ---------- 排序 ---------- */
+.sort-bar{
+  display:flex;align-items:center;gap:7px;
+  padding:0 16px 10px;
+}
+.sort-label{font-size:11.5px;color:var(--sub);flex:none}
+.sort-btn{
+  border:none;background:#f5f5f7;color:var(--sub);
+  font-size:12px;font-weight:500;font-family:inherit;
+  padding:5px 12px;border-radius:100px;cursor:pointer;
+  transition:.15s;
+}
+.sort-btn.on{background:var(--text);color:#fff}
+
+/* ---------- 文件项（新） ---------- */
+.file-row{
+  display:flex;align-items:center;gap:12px;
+  padding:11px 2px;border-bottom:1px solid var(--line);
+  cursor:pointer;
+}
+.file-row:last-child{border-bottom:none}
+.file-row:active{background:#fafafa}
+.fthumb{
+  width:46px;height:46px;border-radius:10px;flex:none;
+  background:#f5f5f7;display:grid;place-items:center;
+  font-size:20px;overflow:hidden;position:relative;
+}
+.fthumb img{
+  width:100%;height:100%;object-fit:cover;display:block;
+}
+.fthumb .badge{
+  position:absolute;bottom:0;right:0;
+  background:rgba(0,0,0,.55);color:#fff;
+  font-size:8.5px;padding:1px 4px;border-radius:5px 0 9px 0;
+  font-weight:600;line-height:1.4;
+}
+.fbody{flex:1;min-width:0}
+.fname{
+  font-size:14px;font-weight:500;line-height:1.35;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.fmeta2{
+  font-size:11px;color:var(--sub);margin-top:3px;
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+}
+.fmeta2 .time{color:#6e6e73}
+.fnew{
+  background:rgba(52,199,89,.13);color:#248a3d;
+  font-size:9.5px;font-weight:700;padding:1px 5px;
+  border-radius:4px;flex:none;
+}
+.fact{
+  display:flex;align-items:center;gap:6px;flex:none;
+}
+.fprev{
+  border:none;background:rgba(0,113,227,.1);color:var(--blue);
+  font-size:11.5px;font-weight:600;font-family:inherit;
+  padding:6px 11px;border-radius:8px;cursor:pointer;
+}
+.fprev:active{transform:scale(.95)}
+.fmore{
+  border:none;background:#f5f5f7;color:var(--sub);
+  width:28px;height:28px;border-radius:8px;
+  font-size:15px;font-family:inherit;cursor:pointer;
+  display:grid;place-items:center;flex:none;
+}
+
+.dir-row{
+  display:flex;align-items:center;gap:12px;
+  padding:12px 2px;border-bottom:1px solid var(--line);
+  cursor:pointer;
+}
+.dir-row:active{background:#fafafa}
+.dir-row .dico{
+  width:46px;height:46px;border-radius:10px;flex:none;
+  background:#fff8e6;display:grid;place-items:center;font-size:21px;
+}
+.dir-row .dname{font-size:14px;font-weight:500;flex:1;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dir-row .darrow{color:#c7c7cc;font-size:16px;flex:none}
+
+/* ---------- 预览层 ---------- */
+.pv{
+  position:fixed;inset:0;z-index:300;
+  background:#000;display:none;
+  flex-direction:column;
+}
+.pv.on{display:flex}
+.pv-top{
+  display:flex;align-items:center;gap:10px;
+  padding:calc(10px + env(safe-area-inset-top)) 14px 10px;
+  flex:none;
+}
+.pv-btn{
+  width:34px;height:34px;flex:none;border:none;border-radius:50%;
+  background:rgba(255,255,255,.14);color:#fff;
+  font-size:15px;font-family:inherit;cursor:pointer;
+  display:grid;place-items:center;
+}
+.pv-title{
+  flex:1;min-width:0;color:#fff;font-size:13px;font-weight:500;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  text-align:center;
+}
+.pv-body{
+  flex:1;min-height:0;display:flex;
+  align-items:center;justify-content:center;
+  overflow:auto;padding:0 8px;
+}
+.pv-body img{
+  max-width:100%;max-height:100%;
+  object-fit:contain;display:block;
+}
+.pv-body video,.pv-body audio{
+  max-width:100%;max-height:100%;width:100%;
+}
+.pv-body pre{
+  color:#e5e5ea;font-size:12.5px;line-height:1.65;
+  font-family:ui-monospace,Menlo,monospace;
+  padding:14px;margin:0;white-space:pre-wrap;word-break:break-all;
+  width:100%;align-self:flex-start;
+}
+.pv-body .pv-unsupported{
+  color:#8e8e93;font-size:14px;text-align:center;padding:40px 20px;
+}
+.pv-body .pv-loading{
+  color:#8e8e93;font-size:13px;
+}
+.pv-foot{
+  flex:none;color:#8e8e93;font-size:11.5px;
+  text-align:center;padding:12px 16px calc(14px + env(safe-area-inset-bottom));
+  line-height:1.6;
+}
+.fitem{
+  display:flex;align-items:center;gap:11px;
+  padding:11px 0;border-bottom:1px solid var(--line);
+  text-decoration:none;color:inherit;
+}
+.fitem:last-child{border-bottom:none}
+.fitem:active{opacity:.55}
+.fico{
+  width:36px;height:36px;border-radius:9px;flex:none;
+  display:grid;place-items:center;font-size:17px;
+  background:#f5f5f7;
+}
+.fmeta{flex:1;min-width:0}
+.fmeta .n{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fmeta .m{font-size:11px;color:var(--sub);margin-top:2px}
+.dl{font-size:11px;color:var(--blue);font-weight:500;flex:none}
+.empty{
+  text-align:center;padding:26px 16px;color:var(--sub);font-size:13px;
+}
+
+/* 剪贴板 */
+.clip-area{
+  width:100%;border:1px solid var(--line);border-radius:10px;
+  padding:11px 12px;font-size:14px;font-family:inherit;
+  background:#fafafa;resize:vertical;min-height:76px;
+  color:var(--text);line-height:1.5;
+}
+.clip-area:focus{outline:none;border-color:var(--blue);background:#fff}
+.clip-acts{display:flex;gap:8px;margin-top:10px}
+.btn{
+  flex:1;border:none;border-radius:10px;padding:11px;
+  font-size:14px;font-weight:500;font-family:inherit;
+  cursor:pointer;transition:.15s;
+}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--blue);color:#fff}
+.btn.ghost{background:#f5f5f7;color:var(--text)}
+.clip-note{font-size:11px;color:var(--sub);margin-top:9px;line-height:1.5}
+
+/* Toast */
+.toast{
+  position:fixed;left:50%;bottom:calc(100px + env(safe-area-inset-bottom));
+  transform:translate(-50%,20px);
+  background:rgba(29,29,31,.92);color:#fff;
+  padding:11px 20px;border-radius:100px;
+  font-size:13.5px;font-weight:500;
+  opacity:0;pointer-events:none;transition:.25s;z-index:200;
+  max-width:86vw;text-align:center;
+  backdrop-filter:blur(10px);
+}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+/* 底部导航 */
+nav{
+  position:fixed;left:0;right:0;bottom:0;z-index:100;
+  background:rgba(255,255,255,.88);
+  backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+  border-top:1px solid var(--line);
+  padding-bottom:env(safe-area-inset-bottom);
+  display:flex;
+}
+nav button{
+  flex:1;border:none;background:none;font-family:inherit;
+  padding:9px 0 7px;display:flex;flex-direction:column;
+  align-items:center;gap:3px;color:var(--sub);
+  font-size:10.5px;font-weight:500;cursor:pointer;
+}
+nav button .i{font-size:19px;line-height:1}
+nav button.on{color:var(--blue)}
+
+/* ---------- 连接设备面板 ---------- */
+.dev-mask{
+  position:fixed;inset:0;background:rgba(0,0,0,.35);
+  opacity:0;pointer-events:none;transition:.25s;z-index:150;
+  backdrop-filter:blur(2px);
+}
+.dev-mask.on{opacity:1;pointer-events:auto}
+.dev-panel{
+  position:fixed;left:0;right:0;bottom:0;z-index:160;
+  background:var(--card);border-radius:20px 20px 0 0;
+  transform:translateY(100%);transition:transform .3s cubic-bezier(.32,.72,0,1);
+  max-height:78vh;display:flex;flex-direction:column;
+  padding-bottom:calc(10px + env(safe-area-inset-bottom));
+  box-shadow:0 -8px 40px rgba(0,0,0,.16);
+}
+.dev-panel.on{transform:translateY(0)}
+.dev-summary{
+  padding:0 18px 12px;font-size:12.5px;color:var(--sub);
+  flex:none;
+}
+.dev-summary b{color:var(--green);font-size:15px;font-weight:600}
+.dev-list{
+  overflow-y:auto;flex:1;padding:0 18px;
+  -webkit-overflow-scrolling:touch;
+}
+.dev-item{
+  display:flex;align-items:center;gap:12px;
+  padding:13px 0;border-bottom:1px solid var(--line);
+}
+.dev-item:last-child{border-bottom:none}
+.dev-item.offline{opacity:.52}
+.dev-ico{
+  width:42px;height:42px;border-radius:11px;flex:none;
+  background:#f5f5f7;display:grid;place-items:center;font-size:20px;
+  position:relative;
+}
+.dev-ico .online-dot{
+  position:absolute;right:-1px;bottom:-1px;
+  width:11px;height:11px;border-radius:50%;
+  background:var(--green);border:2px solid #fff;
+}
+.dev-item.offline .online-dot{background:#c7c7cc}
+.dev-meta{flex:1;min-width:0}
+.dev-name{
+  font-size:14px;font-weight:500;display:flex;align-items:center;gap:6px;
+}
+.dev-tag{
+  font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:4px;
+  background:rgba(0,113,227,.12);color:var(--blue);flex:none;
+}
+.dev-sub{
+  font-size:11px;color:var(--sub);margin-top:3px;
+  display:flex;gap:6px;flex-wrap:wrap;align-items:center;
+}
+.dev-ip{
+  font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
+  background:#f5f5f7;padding:1px 5px;border-radius:4px;
+}
+.dev-state{font-size:11.5px;flex:none;font-weight:500}
+.dev-state.on{color:var(--green)}
+.dev-state.off{color:#b0b0b5}
+.dev-foot{
+  flex:none;display:flex;align-items:center;justify-content:space-between;
+  gap:10px;padding:12px 18px 2px;border-top:1px solid var(--line);
+  margin-top:8px;
+}
+.dev-clear{
+  border:none;background:#f5f5f7;color:var(--sub);
+  font-size:12px;font-family:inherit;font-weight:500;
+  padding:7px 13px;border-radius:8px;cursor:pointer;
+}
+.dev-clear:active{transform:scale(.96)}
+.dev-tip{font-size:10.5px;color:#b0b0b5}
+
+/* 列表末尾提示：到底了 */
+.list-end{
+  text-align:center;font-size:11.5px;color:#b0b0b5;
+  padding:18px 0 6px;letter-spacing:.3px;
+}
+.list-end::before,
+.list-end::after{
+  content:"";display:inline-block;vertical-align:middle;
+  width:26px;height:1px;background:#e0e0e3;margin:0 8px;
+}
+
+.page{display:none}
+.page.on{display:block}
+
+/* ---------- 网络环境卡片 ---------- */
+.net-card{
+  display:flex;align-items:flex-start;gap:11px;
+  background:var(--card);border-radius:var(--radius);
+  margin-top:14px;padding:13px 14px;
+  box-shadow:0 1px 3px rgba(0,0,0,.04),0 4px 16px rgba(0,0,0,.03);
+  border-left:3px solid var(--line);
+  transition:.2s;
+}
+.net-card.good{border-left-color:var(--green)}
+.net-card.warn{border-left-color:#ff9f0a}
+.net-card.error{border-left-color:#ff3b30}
+.net-ico{
+  font-size:19px;line-height:1.3;flex:none;
+}
+.net-body{flex:1;min-width:0}
+.net-title{
+  font-size:13.5px;font-weight:600;
+  display:flex;align-items:center;gap:7px;flex-wrap:wrap;
+}
+.net-tag{
+  font-size:9.5px;font-weight:700;padding:1.5px 6px;
+  border-radius:4px;flex:none;
+}
+.net-card.good .net-tag{background:rgba(52,199,89,.14);color:#248a3d}
+.net-card.warn .net-tag{background:rgba(255,159,10,.16);color:#b26b00}
+.net-card.error .net-tag{background:rgba(255,59,48,.14);color:#c4271f}
+.net-advice{
+  font-size:12px;color:#6e6e73;line-height:1.55;margin-top:4px;
+}
+.net-detail{
+  font-size:10.5px;color:#a1a1a6;margin-top:5px;
+  font-family:ui-monospace,Menlo,monospace;
+}
+.net-refresh{
+  border:none;background:#f5f5f7;color:var(--sub);
+  width:28px;height:28px;border-radius:8px;flex:none;
+  font-size:14px;font-family:inherit;cursor:pointer;
+  display:grid;place-items:center;
+}
+.net-refresh:active{transform:scale(.92)}
+.net-refresh.spin{animation:spin .7s linear}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- 保存位置卡片 ---------- */.mini-btn{
+  border:none;background:rgba(0,113,227,.1);color:var(--blue);
+  font-size:12.5px;font-weight:600;font-family:inherit;
+  padding:5px 13px;border-radius:100px;cursor:pointer;
+}
+.mini-btn:active{transform:scale(.95)}
+.target{
+  display:flex;align-items:center;gap:11px;
+  background:#f5f5f7;border-radius:11px;padding:12px 13px;
+}
+.target .tico{
+  width:34px;height:34px;border-radius:9px;flex:none;
+  background:#fff;display:grid;place-items:center;font-size:17px;
+  box-shadow:0 1px 3px rgba(0,0,0,.06);
+}
+.target .tmeta{flex:1;min-width:0}
+.target .tpath{
+  font-size:13.5px;font-weight:600;line-height:1.35;
+  word-break:break-all;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+}
+.target .tsub{font-size:11px;color:var(--sub);margin-top:3px}
+
+/* 开关 */
+.switch-row{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:12px;margin-top:13px;cursor:pointer;
+  font-size:13.5px;line-height:1.4;
+}
+.switch-row span{flex:1}
+.switch-row em{
+  display:block;font-style:normal;font-size:11px;
+  color:var(--sub);margin-top:2px;
+}
+.switch-row input{display:none}
+.switch-row .sw{
+  width:46px;height:28px;border-radius:100px;flex:none;
+  background:#d2d2d7;position:relative;transition:.22s;
+}
+.switch-row .sw::after{
+  content:"";position:absolute;top:2px;left:2px;
+  width:24px;height:24px;border-radius:50%;background:#fff;
+  transition:.22s;box-shadow:0 2px 5px rgba(0,0,0,.18);
+}
+.switch-row input:checked + .sw{background:var(--green)}
+.switch-row input:checked + .sw::after{transform:translateX(18px)}
+
+/* ---------- 底部弹层 ---------- */
+.sheet-mask{
+  position:fixed;inset:0;background:rgba(0,0,0,.35);
+  opacity:0;pointer-events:none;transition:.25s;z-index:150;
+  backdrop-filter:blur(2px);
+}
+.sheet-mask.on{opacity:1;pointer-events:auto}
+.sheet{
+  position:fixed;left:0;right:0;bottom:0;z-index:160;
+  background:var(--card);border-radius:20px 20px 0 0;
+  transform:translateY(100%);transition:transform .3s cubic-bezier(.32,.72,0,1);
+  max-height:82vh;display:flex;flex-direction:column;
+  padding-bottom:calc(8px + env(safe-area-inset-bottom));
+  box-shadow:0 -8px 40px rgba(0,0,0,.16);
+}
+.sheet.on{transform:translateY(0)}
+.sheet-bar{
+  width:36px;height:4px;border-radius:2px;background:#d2d2d7;
+  margin:8px auto 0;flex:none;
+}
+.sheet-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 18px 8px;flex:none;
+}
+.sheet-head h3{font-size:16px;font-weight:600;letter-spacing:-.3px}
+.close-btn{
+  border:none;background:none;color:var(--blue);
+  font-size:14.5px;font-weight:600;font-family:inherit;
+  padding:4px 0;cursor:pointer;
+}
+.sheet-tabs{
+  display:flex;gap:6px;padding:0 16px 10px;flex:none;
+}
+.st-tab{
+  flex:1;border:none;background:#f5f5f7;color:var(--sub);
+  font-size:12.5px;font-weight:500;font-family:inherit;
+  padding:8px 0;border-radius:9px;cursor:pointer;transition:.15s;
+}
+.st-tab.on{background:var(--text);color:#fff}
+.st-page{display:none;overflow-y:auto;flex:1;padding:0 16px}
+.st-page.on{display:block}
+
+.plist{padding-bottom:8px}
+.pitem{
+  display:flex;align-items:center;gap:11px;
+  padding:12px 2px;border-bottom:1px solid var(--line);
+  cursor:pointer;
+}
+.pitem:last-child{border-bottom:none}
+.pitem:active{opacity:.55}
+.pitem .pico{
+  width:32px;height:32px;border-radius:8px;flex:none;
+  background:#f5f5f7;display:grid;place-items:center;font-size:15px;
+}
+.pitem .pmeta{flex:1;min-width:0}
+.pitem .pn{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pitem .pd{font-size:11px;color:var(--sub);margin-top:2px}
+.pitem .pmark{font-size:12px;color:var(--green);font-weight:600;flex:none}
+.pitem.cur .pn{color:var(--blue)}
+
+.crumb{
+  display:flex;align-items:center;gap:9px;
+  padding:0 0 10px;border-bottom:1px solid var(--line);margin-bottom:4px;
+}
+.crumb-up{
+  border:none;background:#f5f5f7;color:var(--text);
+  font-size:12px;font-family:inherit;font-weight:500;
+  padding:6px 11px;border-radius:8px;cursor:pointer;flex:none;
+}
+.crumb-up:disabled{opacity:.35}
+.crumb-path{
+  font-size:11.5px;color:var(--sub);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left;
+}
+
+/* 新建文件夹 */
+.mkdir-btn{
+  width:100%;border:1px dashed #d2d2d7;background:#fafafa;
+  color:var(--blue);font-size:13px;font-weight:500;font-family:inherit;
+  padding:10px;border-radius:10px;cursor:pointer;margin-bottom:8px;
+  transition:.15s;
+}
+.mkdir-btn:active{background:#f0f7ff;border-color:var(--blue)}
+.mkdir-box{
+  display:none;background:#f5f5f7;border-radius:10px;
+  padding:12px;margin-bottom:10px;
+}
+.mkdir-box.on{display:block;animation:slideDown .2s ease}
+@keyframes slideDown{
+  from{opacity:0;transform:translateY(-6px)}
+  to{opacity:1;transform:translateY(0)}
+}
+.mkdir-box input{
+  width:100%;border:1px solid var(--line);border-radius:8px;
+  padding:11px 12px;font-size:15px;font-family:inherit;
+  background:#fff;color:var(--text);
+}
+.mkdir-box input:focus{outline:none;border-color:var(--blue)}
+.mkdir-acts{display:flex;gap:8px;margin-top:9px}
+.mkdir-acts button{
+  flex:1;border:none;border-radius:8px;padding:9px;
+  font-size:13.5px;font-weight:500;font-family:inherit;cursor:pointer;
+}
+.mkdir-acts button:active{transform:scale(.97)}
+.mini-cancel{background:#fff;color:var(--text);box-shadow:inset 0 0 0 1px var(--line)}
+.mini-ok{background:var(--blue);color:#fff}
+
+/* 新建成功的目录项高亮一下 */
+.pitem.fresh{
+  animation:freshFlash 1.6s ease;
+}
+@keyframes freshFlash{
+  0%{background:rgba(52,199,89,.22)}
+  100%{background:transparent}
+}
+
+.manual-box{padding:4px 0 16px}
+.manual-box input{
+  width:100%;border:1px solid var(--line);border-radius:10px;
+  padding:12px;font-size:14.5px;font-family:inherit;
+  background:#fafafa;color:var(--text);
+}
+.manual-box input:focus{outline:none;border-color:var(--blue);background:#fff}
+.manual-tip{
+  font-size:11.5px;color:var(--sub);line-height:1.75;margin-top:10px;
+}
+.manual-tip code{
+  background:#f0f0f2;padding:1px 5px;border-radius:4px;
+  font-size:11px;font-family:ui-monospace,Menlo,monospace;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="brand">
+      <div class="logo">⚡</div>
+      <div>
+        <h1>WiFiDrop</h1>
+        <small id="hostLabel">局域网互传</small>
+      </div>
+    </div>
+    <button class="dev-badge" id="btnDevices">
+      <span class="dot"></span><span id="devCount">1</span> 台
+    </button>
+  </div>
+</header>
+
+<!-- ========== 页面 1：发送到 Mac ========== -->
+<div class="page on" id="page-send">
+  <div class="wrap">
+
+    <!-- 网络环境提示 -->
+    <div class="net-card" id="netCard">
+      <div class="net-ico" id="netIcon">🌐</div>
+      <div class="net-body">
+        <div class="net-title">
+          <span id="netLabel">检测中…</span>
+          <span class="net-tag" id="netTag"></span>
+        </div>
+        <div class="net-advice" id="netAdvice">正在识别网络环境</div>
+        <div class="net-detail" id="netDetail"></div>
+      </div>
+      <button class="net-refresh" id="btnNetRefresh" title="重新检测">⟳</button>
+    </div>
+
+    <!-- 保存位置 -->
+    <div class="card target-card">
+      <div class="card-head">
+        <h2>保存位置</h2>
+        <button class="mini-btn" id="btnChangeDir">切换</button>
+      </div>
+      <div class="card-body" style="padding-top:0">
+        <div class="target" id="targetBox">
+          <div class="tico">📁</div>
+          <div class="tmeta">
+            <div class="tpath" id="targetPath">加载中…</div>
+            <div class="tsub" id="targetSub"></div>
+          </div>
+        </div>
+        <label class="switch-row">
+          <span>按类型自动分类<em>图片 / 视频 / 其他 子目录</em></span>
+          <input type="checkbox" id="autoSort">
+          <i class="sw"></i>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>传到 Mac</h2>
+        <span class="hint" id="recvHint">照片 / 视频 / 任意文件</span>
+      </div>
+      <div class="card-body">
+        <div class="drop" id="drop">
+          <div class="ico">📤</div>
+          <div class="t">点击选择文件</div>
+          <div class="s">支持多选 · 照片视频文档均可</div>
+        </div>
+        <input type="file" id="picker" multiple>
+        <div class="queue" id="queue"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 页面 2：从 Mac 取 ========== -->
+<div class="page" id="page-get">
+  <div class="wrap">
+    <div class="card">
+      <div class="card-head">
+        <h2>文件列表</h2>
+        <span class="hint" id="getCount"></span>
+      </div>
+
+      <!-- 目录导航条 -->
+      <div class="nav-bar">
+        <button class="nav-up" id="btnNavUp" title="上一级">↑</button>
+        <div class="nav-path" id="navPath">~</div>
+        <button class="nav-refresh" id="btnRefresh" title="刷新">⟳</button>
+      </div>
+
+      <!-- 快捷入口 -->
+      <div class="tabs" id="tabs"></div>
+
+      <!-- 排序 -->
+      <div class="sort-bar">
+        <span class="sort-label">排序</span>
+        <button class="sort-btn on" data-sort="time">最新</button>
+        <button class="sort-btn" data-sort="name">名称</button>
+        <button class="sort-btn" data-sort="size">大小</button>
+      </div>
+
+      <div class="flist" id="flist">
+        <div class="empty">加载中…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 页面 3：剪贴板 ========== -->
+<div class="page" id="page-clip">
+  <div class="wrap">
+    <div class="card">
+      <div class="card-head">
+        <h2>文字互传</h2>
+        <span class="hint">双向同步</span>
+      </div>
+      <div class="card-body">
+        <textarea class="clip-area" id="clipBox" placeholder="在这里输入或粘贴文字、链接，点「发到 Mac」即可出现在 Mac 剪贴板…"></textarea>
+        <div class="clip-acts">
+          <button class="btn primary" id="btnPush">发到 Mac</button>
+          <button class="btn ghost" id="btnPull">取 Mac 剪贴板</button>
+        </div>
+        <div class="clip-note">
+          ✅ 「发到 Mac」会直接写入电脑剪贴板，在 Mac 上按 ⌘V 就能粘贴<br>
+          ✅ 「取 Mac 剪贴板」把电脑上复制的内容拉到手机
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ========== 连接设备 ========== -->
+<div class="dev-mask" id="devMask"></div>
+<div class="dev-panel" id="devPanel">
+  <div class="sheet-bar"></div>
+  <div class="sheet-head">
+    <h3>连着的设备</h3>
+    <button class="close-btn" id="btnDevClose">完成</button>
+  </div>
+  <div class="dev-summary" id="devSummary"></div>
+  <div class="dev-list" id="devList"></div>
+  <div class="dev-foot">
+    <button class="dev-clear" id="btnDevClear">清理离线记录</button>
+    <span class="dev-tip">2 分钟内有操作算在线</span>
+  </div>
+</div>
+
+<!-- ========== 文件预览 ========== -->
+<div class="pv" id="pv">
+  <div class="pv-top">
+    <button class="pv-btn" id="pvClose">✕</button>
+    <div class="pv-title" id="pvTitle"></div>
+    <button class="pv-btn" id="pvDl">⬇</button>
+  </div>
+  <div class="pv-body" id="pvBody"></div>
+  <div class="pv-foot" id="pvFoot"></div>
+</div>
+
+<!-- ========== 目录切换弹层 ========== -->
+<div class="sheet-mask" id="sheetMask"></div>
+<div class="sheet" id="sheet">
+  <div class="sheet-bar"></div>
+  <div class="sheet-head">
+    <h3>选择保存位置</h3>
+    <button class="close-btn" id="btnCloseSheet">完成</button>
+  </div>
+  <div class="sheet-tabs">
+    <button class="st-tab on" data-st="preset">常用位置</button>
+    <button class="st-tab" data-st="browse">浏览文件夹</button>
+    <button class="st-tab" data-st="manual">手动输入</button>
+  </div>
+
+  <!-- 常用位置 -->
+  <div class="st-page on" id="st-preset">
+    <div class="plist" id="plist"><div class="empty">加载中…</div></div>
+  </div>
+
+  <!-- 浏览 -->
+  <div class="st-page" id="st-browse">
+    <div class="crumb">
+      <button class="crumb-up" id="btnUp">↑ 上一级</button>
+      <span class="crumb-path" id="crumbPath"></span>
+    </div>
+    <button class="mkdir-btn" id="btnMkdir">＋ 新建文件夹</button>
+    <div class="mkdir-box" id="mkdirBox">
+      <input type="text" id="mkdirInput" placeholder="文件夹名称" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="120">
+      <div class="mkdir-acts">
+        <button class="mini-cancel" id="btnMkdirCancel">取消</button>
+        <button class="mini-ok" id="btnMkdirOk">创建</button>
+      </div>
+    </div>
+    <div class="plist" id="browseList"></div>
+  </div>
+
+  <!-- 手动输入 -->
+  <div class="st-page" id="st-manual">
+    <div class="manual-box">
+      <input type="text" id="manualInput" placeholder="例如：~/Desktop/收图  或  ~/Pictures/手机照片" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <p class="manual-tip">
+        · 以 <code>~</code> 开头表示你的用户目录<br>
+        · 只写名字（如 <code>收图</code>）会建在「下载」里<br>
+        · 不存在会自动创建，限主目录内
+      </p>
+      <button class="btn primary" id="btnManualGo" style="margin-top:12px">用这个位置</button>
+    </div>
+  </div>
+</div>
+
+<nav>
+  <button class="on" data-page="send"><span class="i">📤</span>传到 Mac</button>
+  <button data-page="get"><span class="i">📥</span>从 Mac 取</button>
+  <button data-page="clip"><span class="i">📋</span>文字</button>
+</nav>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+/* ---------------- 底部导航高度校准 ----------------
+   把 nav 的真实高度写进 CSS 变量 --nav-h，
+   body 的 padding-bottom 据此计算，避免最后一项被遮挡 */
+function syncNavHeight() {
+  const nav = document.querySelector('nav');
+  if (!nav) return;
+  const h = nav.getBoundingClientRect().height;
+  if (h > 0) {
+    document.documentElement.style.setProperty('--nav-h', h + 'px');
+  }
+}
+syncNavHeight();
+window.addEventListener('load', syncNavHeight);
+window.addEventListener('resize', syncNavHeight);
+window.addEventListener('orientationchange', () => setTimeout(syncNavHeight, 200));
+// 地址栏收起/展开也会改变可视区域
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', syncNavHeight);
+}
+
+/* ---------------- Toast ---------------- */
+let toastTimer;
+function toast(msg, ms = 2000) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('on'), ms);
+}
+
+/* ---------------- 页面切换 ---------------- */
+$$('nav button').forEach(b => {
+  b.onclick = () => {
+    $$('nav button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    $$('.page').forEach(p => p.classList.remove('on'));
+    $('#page-' + b.dataset.page).classList.add('on');
+    if (b.dataset.page === 'get') loadFiles(curPath, curSort);
+    if (b.dataset.page === 'clip') { /* 不自动拉取，避免覆盖输入 */ }
+  };
+});
+
+/* ---------------- 初始化 ---------------- */
+let curDirInfo = null;
+let curAutoSort = false;
+
+function refreshTarget() {
+  return fetch('/api/info').then(r => r.json()).then(d => {
+    if (!d.ok) return;
+    curDirInfo = { path: d.recv_dir, display: d.recv_dir_display };
+    $('#hostLabel').textContent = d.host;
+    $('#targetPath').textContent = d.recv_dir_display;
+    $('#recvHint').textContent = '存入 ' + d.recv_dir_short;
+    curAutoSort = !!d.auto_sort;
+    $('#autoSort').checked = curAutoSort;
+    return fetch('/api/dirs').then(r => r.json()).then(dd => {
+      if (dd.ok) $('#targetSub').textContent = `${dd.current.file_count} 个文件 · ${dd.current.path}`;
+    });
+  }).catch(() => {
+    $('#targetPath').textContent = '读取失败';
+  });
+}
+refreshTarget();
+
+/* ---------------- 网络环境 ---------------- */
+function loadNetwork(spin) {
+  const btn = $('#btnNetRefresh');
+  if (spin && btn) {
+    btn.classList.add('spin');
+    setTimeout(() => btn.classList.remove('spin'), 800);
+  }
+  fetch('/api/network')
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) throw new Error();
+      renderNetwork(d);
+    })
+    .catch(() => {
+      $('#netLabel').textContent = '检测失败';
+      $('#netAdvice').textContent = '';
+    });
+}
+
+function renderNetwork(d) {
+  const card = $('#netCard');
+  card.classList.remove('good', 'warn', 'error');
+  card.classList.add(d.risk || 'warn');
+
+  $('#netIcon').textContent = d.icon || '🌐';
+  $('#netLabel').textContent = d.label || '未知网络';
+
+  const tag = $('#netTag');
+  if (d.risk === 'good') {
+    tag.textContent = '通畅';
+  } else if (d.risk === 'error') {
+    tag.textContent = '异常';
+  } else {
+    tag.textContent = '可能受限';
+  }
+
+  $('#netAdvice').textContent = d.advice || '';
+
+  const bits = [];
+  if (d.ip) bits.push(d.ip);
+  if (d.ssid) bits.push(d.ssid);
+  if (d.gateway) bits.push('网关 ' + d.gateway);
+  $('#netDetail').textContent = bits.join('  ·  ');
+}
+
+$('#btnNetRefresh').onclick = () => {
+  loadNetwork(true);
+  toast('已重新检测网络');
+};
+
+loadNetwork();
+
+/* ---------------- 自动分类开关 ---------------- */
+$('#autoSort').onchange = (e) => {
+  const on = e.target.checked;
+  fetch('/api/autosort', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ on }),
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      curAutoSort = d.auto_sort;
+      toast(curAutoSort ? '已开启自动分类' : '已关闭自动分类');
+    }
+  }).catch(() => toast('设置失败'));
+};
+
+/* ---------------- 目录切换弹层 ---------------- */
+const sheet = $('#sheet');
+const mask = $('#sheetMask');
+
+function openSheet() {
+  sheet.classList.add('on');
+  mask.classList.add('on');
+  loadPresets();
+}
+function closeSheet() {
+  sheet.classList.remove('on');
+  mask.classList.remove('on');
+}
+$('#btnChangeDir').onclick = openSheet;
+$('#btnCloseSheet').onclick = closeSheet;
+mask.onclick = closeSheet;
+
+$$('.st-tab').forEach(t => {
+  t.onclick = () => {
+    $$('.st-tab').forEach(x => x.classList.remove('on'));
+    t.classList.add('on');
+    $$('.st-page').forEach(p => p.classList.remove('on'));
+    $('#st-' + t.dataset.st).classList.add('on');
+    if (t.dataset.st === 'browse') { closeMkdir(); loadBrowse(''); }
+    if (t.dataset.st === 'preset') loadPresets();
+  };
+});
+
+const PRESET_ICONS = {
+  wifidrop: '📥', downloads: '⬇️', desktop: '🖥',
+  pictures: '🖼', documents: '📄', movies: '🎬', custom: '📁',
+};
+
+function loadPresets() {
+  const el = $('#plist');
+  el.innerHTML = '<div class="empty">加载中…</div>';
+  fetch('/api/dirs').then(r => r.json()).then(d => {
+    if (!d.ok) throw new Error();
+    el.innerHTML = '';
+    d.presets.forEach(p => {
+      const row = document.createElement('div');
+      row.className = 'pitem' + (p.current ? ' cur' : '');
+      row.innerHTML = `
+        <div class="pico">${PRESET_ICONS[p.key] || '📁'}</div>
+        <div class="pmeta">
+          <div class="pn">${escapeHtml(p.name || p.display)}</div>
+          <div class="pd">${escapeHtml(p.display)} · ${p.file_count} 个文件</div>
+        </div>
+        ${p.current ? '<div class="pmark">✓ 当前</div>' : ''}`;
+      row.onclick = () => {
+        if (p.current) return toast('已经是这个位置了');
+        setDir({ path: p.path }, p.display);
+      };
+      el.appendChild(row);
+    });
+    if (!d.presets.length) el.innerHTML = '<div class="empty">没有可用目录</div>';
+  }).catch(() => {
+    el.innerHTML = '<div class="empty">加载失败</div>';
+  });
+}
+
+let browseParent = null;
+let curBrowsePath = '';       // 当前正在浏览的目录（新建文件夹往这里建）
+let lastCreated = '';         // 刚创建的文件夹完整路径，用于高亮
+
+function loadBrowse(path) {
+  const el = $('#browseList');
+  el.innerHTML = '<div class="empty">加载中…</div>';
+  fetch('/api/dirs/browse' + (path ? '?path=' + encodeURIComponent(path) : ''))
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) {
+        el.innerHTML = `<div class="empty">${escapeHtml(d.error || '读取失败')}</div>`;
+        return;
+      }
+      browseParent = d.parent;
+      curBrowsePath = d.path;          // 记住当前目录，新建文件夹要往这里建
+      $('#crumbPath').textContent = d.display;
+      $('#btnUp').disabled = !d.parent;
+
+      el.innerHTML = '';
+      // 「用当前文件夹」
+      const useRow = document.createElement('div');
+      useRow.className = 'pitem' + (d.is_current ? ' cur' : '');
+      useRow.innerHTML = `
+        <div class="pico">✅</div>
+        <div class="pmeta">
+          <div class="pn">用这个文件夹</div>
+          <div class="pd">${escapeHtml(d.path)}</div>
+        </div>
+        ${d.is_current ? '<div class="pmark">✓ 当前</div>' : ''}`;
+      useRow.onclick = () => {
+        if (d.is_current) return toast('已经是这个位置了');
+        setDir({ path: d.path }, d.display);
+      };
+      el.appendChild(useRow);
+
+      d.subdirs.forEach(s => {
+        const row = document.createElement('div');
+        const isFresh = (lastCreated && s.path === lastCreated);
+        row.className = 'pitem' + (s.is_current ? ' cur' : '') + (isFresh ? ' fresh' : '');
+        row.innerHTML = `
+          <div class="pico">📁</div>
+          <div class="pmeta"><div class="pn">${escapeHtml(s.name)}${isFresh ? ' <span style="color:#34c759;font-size:11px">刚创建</span>' : ''}</div></div>
+          <div class="pmark">›</div>`;
+        row.onclick = () => loadBrowse(s.path);
+        el.appendChild(row);
+        if (isFresh) {
+          // 滚到可见位置
+          setTimeout(() => row.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 120);
+          lastCreated = '';
+        }
+      });
+      if (!d.subdirs.length) {
+        const e = document.createElement('div');
+        e.className = 'empty';
+        e.textContent = '这里没有子文件夹';
+        el.appendChild(e);
+      }
+    })
+    .catch(() => {
+      el.innerHTML = '<div class="empty">读取失败</div>';
+    });
+}
+
+$('#btnUp').onclick = () => { if (browseParent) loadBrowse(browseParent); };
+
+/* ---------------- 新建文件夹 ---------------- */
+
+function openMkdir() {
+  $('#mkdirBox').classList.add('on');
+  $('#mkdirInput').value = '';
+  $('#btnMkdir').style.display = 'none';
+  setTimeout(() => $('#mkdirInput').focus(), 80);
+}
+
+function closeMkdir() {
+  $('#mkdirBox').classList.remove('on');
+  $('#btnMkdir').style.display = '';
+  $('#mkdirInput').value = '';
+}
+
+$('#btnMkdir').onclick = openMkdir;
+$('#btnMkdirCancel').onclick = closeMkdir;
+
+$('#btnMkdirOk').onclick = () => {
+  const name = $('#mkdirInput').value.trim();
+  if (!name) return toast('给文件夹起个名字');
+  if (!curBrowsePath) return toast('不知道建在哪里，先刷新一下');
+
+  const okBtn = $('#btnMkdirOk');
+  okBtn.disabled = true;
+  okBtn.textContent = '创建中…';
+
+  fetch('/api/dirs/mkdir', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ parent: curBrowsePath, name }),
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) {
+        toast(d.error || '创建失败');
+        return;
+      }
+      lastCreated = d.path;
+      closeMkdir();
+      toast('已创建「' + d.name + '」');
+      loadBrowse(curBrowsePath);      // 刷新列表，让新文件夹出现在里面
+    })
+    .catch(() => toast('创建失败，检查网络'))
+    .finally(() => {
+      okBtn.disabled = false;
+      okBtn.textContent = '创建';
+    });
+};
+
+$('#mkdirInput').onkeydown = (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); $('#btnMkdirOk').click(); }
+  if (e.key === 'Escape') { e.preventDefault(); closeMkdir(); }
+};
+
+$('#btnManualGo').onclick = () => {
+  const v = $('#manualInput').value.trim();
+  if (!v) return toast('先输入一个路径');
+  setDir({ path: v }, v);
+};
+$('#manualInput').onkeydown = (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); $('#btnManualGo').click(); }
+};
+
+function setDir(payload, label) {
+  return fetch('/api/dirs/set', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) {
+        toast(d.error || '切换失败');
+        return;
+      }
+      curDirInfo = d.current;
+      $('#targetPath').textContent = d.current.display;
+      $('#targetSub').textContent = `${d.current.file_count} 个文件 · ${d.current.path}`;
+      $('#recvHint').textContent = '存入 ' + d.current.name;
+      toast('已切换到 ' + d.current.display);
+      closeSheet();
+      loadPresets();
+    })
+    .catch(() => toast('切换失败，检查网络'));
+}
+
+/* ---------------- 上传 ---------------- */
+const picker = $('#picker');
+
+$('#drop').onclick = () => picker.click();
+
+picker.onchange = () => {
+  const files = [...picker.files];
+  if (files.length) uploadFiles(files);
+  picker.value = '';
+};
+
+// 拖拽（桌面浏览器也能用）
+const drop = $('#drop');
+['dragenter','dragover'].forEach(e =>
+  drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('hot'); }));
+['dragleave','drop'].forEach(e =>
+  drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('hot'); }));
+drop.addEventListener('drop', ev => {
+  const files = [...(ev.dataTransfer?.files || [])];
+  if (files.length) uploadFiles(files);
+});
+
+const qEl = $('#queue');
+
+function uploadFiles(files) {
+  qEl.classList.add('on');
+  const total = files.length;
+  let done = 0;
+
+  files.forEach((file) => {
+    const row = document.createElement('div');
+    row.className = 'qitem';
+    row.innerHTML = `
+      <div class="nm">${escapeHtml(file.name)}
+        <div class="bar"><i></i></div>
+      </div>
+      <div class="sz">${fmtSize(file.size)}</div>
+      <div class="st">⏳</div>`;
+    qEl.prepend(row);
+
+    const bar = row.querySelector('.bar > i');
+    const st = row.querySelector('.st');
+
+    const fd = new FormData();
+    fd.append('files', file, file.name);
+    if (curAutoSort) fd.append('auto_sort', '1');
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload');
+
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) {
+        bar.style.width = (e.loaded / e.total * 100) + '%';
+      }
+    };
+    xhr.onload = () => {
+      done++;
+      if (xhr.status === 200) {
+        bar.style.width = '100%';
+        st.textContent = '✅';
+        if (done === total) {
+          const where = curDirInfo ? curDirInfo.display : 'Mac';
+          toast(`已传 ${total} 个文件 → ${where}`);
+          // 上传后如果正停在接收目录，自动刷新列表
+          if (lastData && lastData.path === (curDirInfo?.path)) loadFiles(curPath, curSort);
+          setTimeout(() => { if (done === total) qEl.classList.remove('on'), qEl.innerHTML = ''; }, 3200);
+          refreshTarget();
+        }
+      } else {
+        st.textContent = '❌';
+        toast('上传失败：' + file.name);
+      }
+    };
+    xhr.onerror = () => { st.textContent = '❌'; toast('网络错误，请确认同一 WiFi'); };
+    xhr.send(fd);
+  });
+}
+
+/* ---------------- 文件列表（浏览器式） ---------------- */
+let curPath = '';        // 当前浏览的真实路径
+let curSort = 'time';
+let lastData = null;
+let loading = false;     // 防止并发请求互相覆盖
+
+// 快捷入口
+const SHORTCUTS = [
+  { key: 'recv', label: '📥 接收目录', path: '' },
+  { key: 'desktop', label: '🖥 桌面', path: null },
+  { key: 'downloads', label: '⬇️ 下载', path: null },
+  { key: 'pictures', label: '🖼 图片', path: null },
+];
+// key -> 真实路径。先用主目录的常识路径兜底，接口返回后会用准确值覆盖
+let shortcutPaths = {
+  desktop: '~/Desktop',
+  downloads: '~/Downloads',
+  pictures: '~/Pictures',
+};
+
+let reqSeq = 0;          // 请求序号，只接受最新一次的结果
+
+function loadFiles(path, sort) {
+  if (sort) curSort = sort;
+
+  let target = (path === undefined || path === null || path === '')
+    ? curPath : path;
+  if (!target && shortcutPaths.recv) target = shortcutPaths.recv;
+
+  const q = new URLSearchParams();
+  if (target) q.set('path', target);
+  q.set('sort', curSort);
+
+  const mySeq = ++reqSeq;
+  $('#flist').innerHTML = '<div class="empty">加载中…</div>';
+
+  fetch('/api/files?' + q.toString())
+    .then(r => r.json())
+    .then(d => {
+      if (mySeq !== reqSeq) return;      // 已经有更新的请求了，丢弃这次结果
+      if (!d.ok) {
+        $('#flist').innerHTML = `<div class="empty">${escapeHtml(d.error || '加载失败')}</div>`;
+        return;
+      }
+      if (d.mode === 'group') {
+        // 首次进入：拿到各组真实路径，记住接收目录，再请求浏览模式
+        d.groups.forEach(g => { shortcutPaths[g.key] = g.path; });
+        const recv = d.groups.find(g => g.key === 'recv') || d.groups[0];
+        if (recv) {
+          curPath = recv.path;
+          return loadFiles(curPath, curSort);
+        }
+        return;
+      }
+      lastData = d;
+      renderFiles();
+    })
+    .catch(() => {
+      if (mySeq !== reqSeq) return;
+      $('#flist').innerHTML = '<div class="empty">加载失败</div>';
+    });
+}
+
+function renderFiles() {
+  const d = lastData;
+  if (!d || d.mode !== 'browse') return;
+
+  curPath = d.path;
+  $('#navPath').textContent = d.display;
+  $('#btnNavUp').dataset.parent = d.parent || '';
+  $('#btnNavUp').disabled = !d.parent;
+
+  // 快捷入口高亮
+  const tabs = $('#tabs');
+  tabs.innerHTML = '';
+  Object.entries(shortcutPaths).forEach(([key, p]) => {
+    const b = document.createElement('button');
+    const isCur = (p === d.path);
+    b.className = 'tab' + (isCur ? ' on' : '');
+    b.textContent = {
+      recv: '📥 接收目录', desktop: '🖥 桌面',
+      downloads: '⬇️ 下载', pictures: '🖼 图片',
+    }[key] || key;
+    b.onclick = () => loadFiles(key === 'recv' ? shortcutPaths.recv : p, curSort);
+    tabs.appendChild(b);
+  });
+
+  // 当前目录不在快捷入口里时，显示一个只读标记
+  const inShortcut = Object.values(shortcutPaths).some(p => p === d.path);
+  if (!inShortcut) {
+    const b = document.createElement('button');
+    b.className = 'tab on';
+    b.textContent = '📂 ' + (d.name || d.display);
+    tabs.appendChild(b);
+  }
+
+  const fl = $('#flist');
+  fl.innerHTML = '';
+
+  // 子目录
+  (d.subdirs || []).forEach(sd => {
+    const row = document.createElement('div');
+    row.className = 'dir-row';
+    row.innerHTML = `
+      <div class="dico">📁</div>
+      <div class="dname">${escapeHtml(sd.name)}</div>
+      <div class="darrow">›</div>`;
+    row.onclick = () => loadFiles(sd.path, curSort);
+    fl.appendChild(row);
+  });
+
+  // 文件
+  (d.files || []).forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'file-row';
+
+    // 缩略图：图片直接用 /api/preview 拉
+    const canPrev = f.preview && f.preview !== 'none';
+    const thumb = f.preview === 'image'
+      ? `<img src="/api/preview?path=${encodeURIComponent(f.path)}" loading="lazy" alt="">`
+      : icon(f.kind);
+
+    row.innerHTML = `
+      <div class="fthumb">${thumb}${f.is_new ? '<span class="badge">新</span>' : ''}</div>
+      <div class="fbody">
+        <div class="fname">${escapeHtml(f.name)}</div>
+        <div class="fmeta2">
+          <span class="time">🕐 ${f.mtime_h}</span>
+          <span>·</span>
+          <span>${f.size_h}</span>
+        </div>
+      </div>
+      <div class="fact">
+        ${canPrev ? '<button class="fprev">预览</button>' : ''}
+        <button class="fmore">⬇</button>
+      </div>`;
+
+    // 点行 = 预览（能预览的）或下载
+    row.onclick = () => canPrev ? openPreview(f) : downloadFile(f);
+    // 预览按钮：阻止冒泡，避免触发两次
+    const pb = row.querySelector('.fprev');
+    if (pb) pb.onclick = (e) => { e.stopPropagation(); openPreview(f); };
+    row.querySelector('.fmore').onclick = (e) => { e.stopPropagation(); downloadFile(f); };
+
+    fl.appendChild(row);
+  });
+
+  if (!(d.files || []).length && !(d.subdirs || []).length) {
+    fl.innerHTML = '<div class="empty">这个文件夹是空的</div>';
+  } else {
+    // 列表末尾收尾提示，让人知道滑到底了
+    const end = document.createElement('div');
+    end.className = 'list-end';
+    end.textContent = '到底了';
+    fl.appendChild(end);
+  }
+
+  const total = (d.files || []).length;
+  const dirCount = (d.subdirs || []).length;
+  $('#getCount').textContent =
+    total || dirCount ? `${total} 个文件${dirCount ? ' · ' + dirCount + ' 个文件夹' : ''}` : '';
+}
+
+function downloadFile(f) {
+  const a = document.createElement('a');
+  a.href = '/api/download?path=' + encodeURIComponent(f.path);
+  a.download = f.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  toast('开始下载 ' + f.name);
+}
+
+/* ---------------- 预览 ---------------- */
+const pv = $('#pv');
+
+function openPreview(f) {
+  $('#pvTitle').textContent = f.name;
+  $('#pvFoot').textContent = `${f.mtime_h} · ${f.size_h}`;
+  $('#pvDl').onclick = () => downloadFile(f);
+
+  const body = $('#pvBody');
+  body.innerHTML = '<div class="pv-loading">加载中…</div>';
+
+  const url = '/api/preview?path=' + encodeURIComponent(f.path);
+
+  if (f.preview === 'image') {
+    const img = new Image();
+    img.onload = () => { body.innerHTML = ''; body.appendChild(img); };
+    img.onerror = () => { body.innerHTML = '<div class="pv-unsupported">图片加载失败</div>'; };
+    img.src = url;
+    img.alt = f.name;
+
+  } else if (f.preview === 'video') {
+    body.innerHTML = '';
+    const v = document.createElement('video');
+    v.src = url;
+    v.controls = true;
+    v.playsInline = true;
+    v.preload = 'metadata';
+    body.appendChild(v);
+
+  } else if (f.preview === 'audio') {
+    body.innerHTML = '';
+    const a = document.createElement('audio');
+    a.src = url;
+    a.controls = true;
+    a.style.padding = '20px';
+    body.appendChild(a);
+
+  } else if (f.preview === 'text') {
+    fetch(url).then(r => r.json()).then(d => {
+      if (!d.ok) throw new Error(d.error);
+      const pre = document.createElement('pre');
+      pre.textContent = d.text + (d.truncated ? '\n\n…（内容过长，已截断）' : '');
+      body.innerHTML = '';
+      body.appendChild(pre);
+    }).catch(() => {
+      body.innerHTML = '<div class="pv-unsupported">无法读取文本内容</div>';
+    });
+
+  } else {
+    body.innerHTML = '<div class="pv-unsupported">这种格式不支持预览<br>请点右上角 ⬇ 下载后查看</div>';
+  }
+
+  pv.classList.add('on');
+  document.body.style.overflow = 'hidden';
+}
+
+function closePreview() {
+  pv.classList.remove('on');
+  document.body.style.overflow = '';
+  // 停止正在播放的媒体
+  $('#pvBody').querySelectorAll('video,audio').forEach(m => { m.pause(); m.src = ''; });
+  $('#pvBody').innerHTML = '';
+}
+
+$('#pvClose').onclick = closePreview;
+
+// 点空白处关闭（点在图片/视频上不关）
+$('#pvBody').onclick = (e) => {
+  if (e.target.id === 'pvBody') closePreview();
+};
+
+// ESC 关闭（连了键盘的 iPad 也能用）
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && pv.classList.contains('on')) closePreview();
+});
+
+/* ---------------- 导航与排序 ---------------- */
+$('#btnNavUp').onclick = () => {
+  const p = $('#btnNavUp').dataset.parent;
+  if (p) loadFiles(p, curSort);
+};
+$('#btnRefresh').onclick = () => {
+  loadFiles(curPath, curSort);
+  toast('已刷新');
+};
+
+$$('.sort-btn').forEach(b => {
+  b.onclick = () => {
+    $$('.sort-btn').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    curSort = b.dataset.sort;
+    loadFiles(curPath, curSort);
+  };
+});
+
+function icon(kind) {
+  return { image: '🖼', video: '🎬', audio: '🎵', doc: '📄', archive: '🗜', file: '📦' }[kind] || '📦';
+}
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  const s = Math.floor(Date.now() / 1000 - ts);
+  if (s < 60) return '刚刚';
+  if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
+  if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
+  if (s < 604800) return Math.floor(s / 86400) + ' 天前';
+  const d = new Date(ts * 1000);
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+/* ---------------- 连接设备 ---------------- */
+const devPanel = $('#devPanel');
+const devMask = $('#devMask');
+
+function openDevices() {
+  devPanel.classList.add('on');
+  devMask.classList.add('on');
+  loadDevices();
+}
+
+function closeDevices() {
+  devPanel.classList.remove('on');
+  devMask.classList.remove('on');
+}
+
+$('#btnDevices').onclick = openDevices;
+$('#btnDevClose').onclick = closeDevices;
+devMask.onclick = closeDevices;
+
+let devTimer = null;
+
+function loadDevices() {
+  fetch('/api/devices')
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) throw new Error();
+      renderDevices(d);
+      updateDevBadge(d);
+    })
+    .catch(() => {
+      $('#devList').innerHTML = '<div class="empty">读取失败</div>';
+    });
+}
+
+function updateDevBadge(d) {
+  const badge = $('#btnDevices');
+  const n = d.online || 0;
+  $('#devCount').textContent = n;
+  badge.classList.toggle('only-self', n <= 1);
+}
+
+function renderDevices(d) {
+  const list = $('#devList');
+  const others = (d.devices || []).filter(x => x.online).length;
+
+  $('#devSummary').innerHTML =
+    `当前 <b>${d.online || 0}</b> 台在线` +
+    (d.total > d.online ? `，另有 ${d.total - d.online} 台离线` : '');
+
+  if (!d.devices || !d.devices.length) {
+    list.innerHTML = '<div class="empty">还没有设备连过</div>';
+    return;
+  }
+
+  list.innerHTML = '';
+  d.devices.forEach(x => {
+    const isSelf = (x.ip === d.self_ip);
+    const row = document.createElement('div');
+    row.className = 'dev-item' + (x.online ? '' : ' offline');
+    row.innerHTML = `
+      <div class="dev-ico">${x.icon}<span class="online-dot"></span></div>
+      <div class="dev-meta">
+        <div class="dev-name">
+          ${escapeHtml(x.os)}
+          ${isSelf ? '<span class="dev-tag">本机</span>' : ''}
+        </div>
+        <div class="dev-sub">
+          <span>${escapeHtml(x.browser)}</span>
+          <span class="dev-ip">${escapeHtml(x.ip)}</span>
+        </div>
+        <div class="dev-sub">
+          <span>首次 ${x.first_seen_h}</span>
+          <span>·</span>
+          <span>${x.requests} 次请求</span>
+        </div>
+      </div>
+      <div class="dev-state ${x.online ? 'on' : 'off'}">
+        ${x.online ? '在线' : x.idle_h}
+      </div>`;
+    list.appendChild(row);
+  });
+}
+
+$('#btnDevClear').onclick = () => {
+  fetch('/api/devices/clear', { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      toast(d.removed ? `已清理 ${d.removed} 条离线记录` : '没有离线记录要清理');
+      loadDevices();
+    })
+    .catch(() => toast('操作失败'));
+};
+
+// 打开面板时自动刷新
+const _openDevicesOrig = openDevices;
+openDevices = function () {
+  _openDevicesOrig();
+  if (devTimer) clearInterval(devTimer);
+  devTimer = setInterval(() => {
+    if (devPanel.classList.contains('on')) loadDevices();
+  }, 5000);
+};
+
+// 页面加载后先取一次设备数
+setTimeout(loadDevices, 800);
+// 每 30 秒刷新徽标上的在线数
+setInterval(() => {
+  if (!devPanel.classList.contains('on')) {
+    fetch('/api/devices').then(r => r.json())
+      .then(d => { if (d.ok) updateDevBadge(d); })
+      .catch(() => {});
+  }
+}, 30000);
+
+/* ---------------- 剪贴板 ---------------- */
+$('#btnPush').onclick = () => {
+  const text = $('#clipBox').value;
+  if (!text.trim()) return toast('先输入点内容');
+
+  const btn = $('#btnPush');
+  btn.disabled = true;
+  btn.textContent = '发送中…';
+
+  fetch('/api/clip', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) {
+        toast('发送失败');
+        return;
+      }
+      if (!d.pushed_to_mac) {
+        // 明确告知失败原因，别假装成功
+        toast('❌ 写入 Mac 剪贴板失败，请重试', 3000);
+        return;
+      }
+      if (d.matched) {
+        toast('✅ 已复制到 Mac，去按 ⌘V 粘贴', 2600);
+      } else {
+        // 回读不一致时如实告知
+        toast('⚠️ 已发送但内容可能有出入，请在 Mac 上确认', 3200);
+      }
+    })
+    .catch(() => toast('发送失败，检查网络'))
+    .finally(() => {
+      btn.disabled = false;
+      btn.textContent = '发到 Mac';
+    });
+};
+
+$('#btnPull').onclick = () => {
+  const btn = $('#btnPull');
+  btn.disabled = true;
+  btn.textContent = '获取中…';
+
+  fetch('/api/clip?from_mac=1')
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) {
+        toast('获取失败');
+        return;
+      }
+      if (!d.text) {
+        toast('Mac 剪贴板是空的');
+        return;
+      }
+      // 清掉不可见字符，避免显示成奇怪符号
+      let v = d.text.replace(/[\u200B-\u200D\uFEFF]/g, '');
+      $('#clipBox').value = v;
+
+      if (d.has_replacement || v.includes('\uFFFD')) {
+        toast('⚠️ 内容含无法识别的字符，可能显示不全', 3200);
+      } else {
+        toast(`已获取（${v.length} 字）`, 2000);
+      }
+    })
+    .catch(() => toast('获取失败，检查网络'))
+    .finally(() => {
+      btn.disabled = false;
+      btn.textContent = '取 Mac 剪贴板';
+    });
+};
+
+/* ---------------- 小工具 ---------------- */
+function fmtSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* 首次进入若停在「从 Mac 取」，自动加载 */
+</script>
+</body>
+</html>
