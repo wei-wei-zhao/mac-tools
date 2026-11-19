@@ -141,6 +141,13 @@ final class HotKeyCenter {
     private var nextID: UInt32 = 1
     private var installed = false
 
+    /// 注销全部已注册热键（用于修改快捷键后重新注册）
+    func unregisterAll() {
+        for r in refs { UnregisterEventHotKey(r) }
+        refs.removeAll()
+        handlers.removeAll()
+    }
+
     func register(keyCode: UInt32, modifiers: UInt32, handler: @escaping () -> Void) -> UInt32 {
         installHandlerIfNeeded()
         let id = nextID
@@ -170,6 +177,78 @@ final class HotKeyCenter {
             HotKeyCenter.shared.handlers[hkID.id]?()
             return noErr
         }, 1, &spec, nil, nil)
+    }
+}
+
+// MARK: - 快捷键配置
+
+/// 用户可自定义的唤起快捷键。存 keyCode + Carbon 修饰键掩码
+struct HotKeyConfig: Equatable {
+    var keyCode: UInt32
+    var carbonModifiers: UInt32
+
+    static let `default` = HotKeyConfig(keyCode: UInt32(kVK_ANSI_V),
+                                        carbonModifiers: UInt32(cmdKey | shiftKey))
+
+    /// 读配置。未设置过返回默认值
+    static func load() -> HotKeyConfig {
+        let d = UserDefaults.standard
+        guard d.object(forKey: "hotkeyKeyCode") != nil else { return .default }
+        return HotKeyConfig(keyCode: UInt32(d.integer(forKey: "hotkeyKeyCode")),
+                            carbonModifiers: UInt32(d.integer(forKey: "hotkeyModifiers")))
+    }
+
+    func save() {
+        let d = UserDefaults.standard
+        d.set(Int(keyCode), forKey: "hotkeyKeyCode")
+        d.set(Int(carbonModifiers), forKey: "hotkeyModifiers")
+    }
+
+    func reset() {
+        let d = UserDefaults.standard
+        d.removeObject(forKey: "hotkeyKeyCode")
+        d.removeObject(forKey: "hotkeyModifiers")
+    }
+
+    /// 转成可读的显示文本，如 "⇧⌘V"
+    var displayString: String {
+        var s = ""
+        if carbonModifiers & UInt32(controlKey) != 0 { s += "⌃" }
+        if carbonModifiers & UInt32(optionKey) != 0 { s += "⌥" }
+        if carbonModifiers & UInt32(shiftKey) != 0 { s += "⇧" }
+        if carbonModifiers & UInt32(cmdKey) != 0 { s += "⌘" }
+        s += KeyName.of(keyCode)
+        return s
+    }
+
+    /// 至少需要一个修饰键，否则会吃掉普通输入
+    var isValid: Bool { carbonModifiers != 0 }
+}
+
+enum KeyName {
+    static func of(_ code: UInt32) -> String {
+        let map: [Int: String] = [
+            kVK_ANSI_A: "A", kVK_ANSI_B: "B", kVK_ANSI_C: "C", kVK_ANSI_D: "D",
+            kVK_ANSI_E: "E", kVK_ANSI_F: "F", kVK_ANSI_G: "G", kVK_ANSI_H: "H",
+            kVK_ANSI_I: "I", kVK_ANSI_J: "J", kVK_ANSI_K: "K", kVK_ANSI_L: "L",
+            kVK_ANSI_M: "M", kVK_ANSI_N: "N", kVK_ANSI_O: "O", kVK_ANSI_P: "P",
+            kVK_ANSI_Q: "Q", kVK_ANSI_R: "R", kVK_ANSI_S: "S", kVK_ANSI_T: "T",
+            kVK_ANSI_U: "U", kVK_ANSI_V: "V", kVK_ANSI_W: "W", kVK_ANSI_X: "X",
+            kVK_ANSI_Y: "Y", kVK_ANSI_Z: "Z",
+            kVK_ANSI_0: "0", kVK_ANSI_1: "1", kVK_ANSI_2: "2", kVK_ANSI_3: "3",
+            kVK_ANSI_4: "4", kVK_ANSI_5: "5", kVK_ANSI_6: "6", kVK_ANSI_7: "7",
+            kVK_ANSI_8: "8", kVK_ANSI_9: "9",
+            kVK_Space: "Space", kVK_Return: "⏎", kVK_Tab: "⇥",
+            kVK_ANSI_Comma: ",", kVK_ANSI_Period: ".", kVK_ANSI_Slash: "/",
+            kVK_ANSI_Semicolon: ";", kVK_ANSI_Quote: "'",
+            kVK_ANSI_LeftBracket: "[", kVK_ANSI_RightBracket: "]",
+            kVK_ANSI_Backslash: "\\", kVK_ANSI_Minus: "-", kVK_ANSI_Equal: "=",
+            kVK_ANSI_Grave: "`",
+            kVK_F1: "F1", kVK_F2: "F2", kVK_F3: "F3", kVK_F4: "F4",
+            kVK_F5: "F5", kVK_F6: "F6", kVK_F7: "F7", kVK_F8: "F8",
+            kVK_F9: "F9", kVK_F10: "F10", kVK_F11: "F11", kVK_F12: "F12",
+        ]
+        return map[Int(code)] ?? "Key\(code)"
     }
 }
 
@@ -921,11 +1000,98 @@ final class SettingsWindowController {
     }
 }
 
+/// 快捷键录制控件：点击后进入录制态，按下组合键即保存
+struct HotKeyRecorder: NSViewRepresentable {
+    @Binding var display: String
+    var onCapture: (HotKeyConfig) -> Void
+
+    final class RecorderView: NSView {
+        var onCapture: ((HotKeyConfig) -> Void)?
+        var onDisplayChange: ((String) -> Void)?
+        private var recording = false
+        private var label = NSTextField(labelWithString: "")
+        private var button = NSButton()
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            button.title = "录制"
+            button.bezelStyle = .rounded
+            button.target = self
+            button.action = #selector(startRecording)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            label.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(label)
+            addSubview(button)
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: leadingAnchor),
+                label.centerYAnchor.constraint(equalTo: centerYAnchor),
+                button.trailingAnchor.constraint(equalTo: trailingAnchor),
+                button.centerYAnchor.constraint(equalTo: centerYAnchor),
+                button.widthAnchor.constraint(equalToConstant: 60),
+                heightAnchor.constraint(equalToConstant: 26),
+            ])
+        }
+
+        required init?(coder: NSCoder) { fatalError() }
+
+        func setDisplay(_ t: String) { label.stringValue = t }
+
+        @objc private func startRecording() {
+            recording = true
+            label.stringValue = "请按下快捷键…"
+            window?.makeFirstResponder(self)
+        }
+
+        override var acceptsFirstResponder: Bool { true }
+
+        override func keyDown(with event: NSEvent) {
+            guard recording else { super.keyDown(with: event); return }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            var carbon: UInt32 = 0
+            if flags.contains(.command) { carbon |= UInt32(cmdKey) }
+            if flags.contains(.shift)   { carbon |= UInt32(shiftKey) }
+            if flags.contains(.option)  { carbon |= UInt32(optionKey) }
+            if flags.contains(.control) { carbon |= UInt32(controlKey) }
+
+            // Esc 取消录制
+            if event.keyCode == 53 { recording = false; onDisplayChange?(label.stringValue); return }
+
+            guard carbon != 0 else {
+                label.stringValue = "需要至少一个修饰键"
+                return
+            }
+            let cfg = HotKeyConfig(keyCode: UInt32(event.keyCode), carbonModifiers: carbon)
+            recording = false
+            label.stringValue = cfg.displayString
+            onCapture?(cfg)
+        }
+    }
+
+    func makeNSView(context: Context) -> RecorderView {
+        let v = RecorderView()
+        v.setDisplay(display)
+        v.onCapture = { cfg in
+            display = cfg.displayString
+            onCapture(cfg)
+        }
+        v.onDisplayChange = { display = $0 }
+        return v
+    }
+
+    func updateNSView(_ v: RecorderView, context: Context) {
+        if v.window?.firstResponder is RecorderView { return }
+        v.setDisplay(display)
+    }
+}
+
 struct SettingsView: View {
     @AppStorage("maxItems") private var maxItems: Int = -1
     @AppStorage("pasteRestore") private var pasteRestore: Bool = true
     @State private var launchAtLogin: Bool = false
     @State private var saved = false
+    @State private var hotkeyDisplay: String = HotKeyConfig.load().displayString
+    @State private var hotkeySaved: Bool = false
 
     var body: some View {
         Form {
@@ -962,9 +1128,33 @@ struct SettingsView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
-            Section("快捷键") {
-                Text("Shift + Command + C  唤起 / 关闭历史面板")
-                Text("Command + V  最近一条（系统原生）")
+            Section("唤起快捷键") {
+                HotKeyRecorder(display: $hotkeyDisplay) { cfg in
+                    guard cfg.isValid else { return }
+                    cfg.save()
+                    (NSApp.delegate as? AppDelegate)?.registerHotKey()
+                    hotkeySaved = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { hotkeySaved = false }
+                }
+                HStack {
+                    Text("⌘V 粘贴最近一条（系统原生，不受影响）")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("恢复默认") {
+                        HotKeyConfig.default.reset()
+                        hotkeyDisplay = HotKeyConfig.default.displayString
+                        (NSApp.delegate as? AppDelegate)?.registerHotKey()
+                    }
+                    .font(.system(size: 11))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                }
+                if hotkeySaved {
+                    Text("已保存并生效").font(.system(size: 11)).foregroundStyle(.green)
+                }
+                Text("兜底组合 ⌃⌥⌘V 始终可用，防止自定义键被系统占用后无法唤起。")
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
             Section("数据位置") {
@@ -1105,29 +1295,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let monitor = MonitorRef.shared.monitor
     private var hotkeyID: UInt32 = 0
 
+    /// 按当前配置注册唤起快捷键，并注册一个兜底键
+    func registerHotKey() {
+        HotKeyCenter.shared.unregisterAll()
+        let cfg = HotKeyConfig.load()
+        hotkeyID = HotKeyCenter.shared.register(keyCode: cfg.keyCode,
+                                                modifiers: cfg.carbonModifiers) {
+            DispatchQueue.main.async { PanelController.shared.toggle() }
+        }
+        if hotkeyID == 0 {
+            NSLog("ClipStack: 自定义快捷键注册失败，回退到默认 ⇧⌘V")
+            let d = HotKeyConfig.default
+            hotkeyID = HotKeyCenter.shared.register(keyCode: d.keyCode,
+                                                    modifiers: d.carbonModifiers) {
+                DispatchQueue.main.async { PanelController.shared.toggle() }
+            }
+        }
+        // 兜底键：⌃⌥⌘V，避免用户设的键被系统占用后完全无法唤起
+        _ = HotKeyCenter.shared.register(keyCode: UInt32(kVK_ANSI_V),
+                                         modifiers: UInt32(cmdKey | optionKey | controlKey)) {
+            DispatchQueue.main.async { PanelController.shared.toggle() }
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         installCrashLogger()
         NSApp.setActivationPolicy(.accessory) // 不占 Dock
 
         monitor.start()
 
-        // 主热键：⇧⌘C —— 再按一次收起（toggle）
-        _ = HotKeyCenter.shared.register(keyCode: UInt32(kVK_ANSI_C),
-                                        modifiers: UInt32(cmdKey | shiftKey)) {
-            DispatchQueue.main.async { PanelController.shared.toggle() }
-        }
-
-        // 兼容旧键：⇧⌘V 同样可以唤起/关闭
-        hotkeyID = HotKeyCenter.shared.register(keyCode: UInt32(kVK_ANSI_V),
-                                               modifiers: UInt32(cmdKey | shiftKey)) {
-            DispatchQueue.main.async { PanelController.shared.toggle() }
-        }
-
-        // 兜底热键：⌃⌥⌘V（若系统抢走了 ⇧⌘C/⇧⌘V 可用这个）
-        _ = HotKeyCenter.shared.register(keyCode: UInt32(kVK_ANSI_V),
-                                         modifiers: UInt32(cmdKey | optionKey | controlKey)) {
-            DispatchQueue.main.async { PanelController.shared.toggle() }
-        }
+        registerHotKey()
 
         setupStatusItem()
 
@@ -1146,7 +1343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("ClipStack: 已迁移到无限历史")
         }
 
-        NSLog("ClipStack: 启动完成, hotkey id=\(hotkeyID)")
+        NSLog("ClipStack: 启动完成, 快捷键=\(HotKeyConfig.load().displayString)")
     }
 
     private func setupStatusItem() {
