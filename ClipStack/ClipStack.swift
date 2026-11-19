@@ -82,6 +82,15 @@ final class ClipStore: ObservableObject {
         if items.count > limit { items = Array(items.prefix(limit)) }
     }
 
+    /// 整表替换（供 Maccy 导入使用）
+    func replaceAll(with newItems: [ClipItem]) {
+        DispatchQueue.main.async {
+            self.items = newItems
+            self.trim()
+            self.save()
+        }
+    }
+
     func clearAll(keepingPinned: Bool = false) {
         if keepingPinned {
             items.removeAll { !$0.isPinned }
@@ -1092,6 +1101,8 @@ struct SettingsView: View {
     @State private var saved = false
     @State private var hotkeyDisplay: String = HotKeyConfig.load().displayString
     @State private var hotkeySaved: Bool = false
+    @State private var importing = false
+    @State private var importMessage: String?
 
     var body: some View {
         Form {
@@ -1157,6 +1168,34 @@ struct SettingsView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
+            Section("从 Maccy 导入") {
+                if MaccyImporter.hasMaccyData() {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("已检测到 Maccy 数据")
+                            Text("会把 Maccy 里的纯文本历史合并进来，重复内容自动跳过。")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(importing ? "导入中…" : "开始导入") { runImport() }
+                            .disabled(importing)
+                    }
+                    if let msg = importMessage {
+                        Text(msg)
+                            .font(.system(size: 11))
+                            .foregroundStyle(msg.hasPrefix("✅") ? Color.green : Color.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    Text("未检测到 Maccy 数据。")
+                        .foregroundStyle(.secondary)
+                    Text("本功能会自动读取 ~/Library/Application Support/Maccy/Storage.sqlite，只导入纯文本，不修改 Maccy 本身。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Section("数据位置") {
                 HStack {
                     Text(ClipStore.shared.dataDir.path)
@@ -1172,6 +1211,25 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .onAppear { launchAtLogin = LaunchAtLogin.isEnabled }
+    }
+
+    private func runImport() {
+        importing = true
+        importMessage = nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            let r = MaccyImporter.importInto(ClipStore.shared)
+            DispatchQueue.main.async {
+                importing = false
+                if let err = r.errorMessage {
+                    importMessage = "❌ \(err)"
+                } else {
+                    var parts = ["✅ 导入 \(r.imported) 条"]
+                    if r.skippedDuplicate > 0 { parts.append("跳过重复 \(r.skippedDuplicate) 条") }
+                    if r.skippedNoText > 0 { parts.append("忽略非文本 \(r.skippedNoText) 条") }
+                    importMessage = parts.joined(separator: "，")
+                }
+            }
+        }
     }
 }
 
@@ -1372,7 +1430,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 }
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
+// 程序入口（多文件编译时不能有顶层表达式，用 @main 结构体承载）
+@main
+struct ClipStackMain {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.run()
+    }
+}
