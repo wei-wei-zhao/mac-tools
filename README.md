@@ -103,3 +103,7 @@ pyinstaller wifidrop.spec
 ## 许可证
 
 [MIT](LICENSE)
+
+---
+
+如果这个小工具帮你省下了一点时间，点个 ⭐️ 会让更多人看到它。
