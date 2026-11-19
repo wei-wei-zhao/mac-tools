@@ -1195,6 +1195,10 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                Text("说明：本功能仅读取你本机已存在的第三方数据文件，未使用其任何代码，与 Maccy 官方无关联。Maccy 是其各自权利人的商标。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Section("数据位置") {
                 HStack {
