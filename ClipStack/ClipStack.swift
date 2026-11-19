@@ -54,7 +54,7 @@ final class ClipStore: ObservableObject {
     }
 
     func add(_ text: String) {
-        guard currentMax > 0 else { return }
+        guard !isPaused else { return }
         DispatchQueue.main.async {
             if let idx = self.items.firstIndex(where: { $0.text == text }) {
                 var moved = self.items.remove(at: idx)
@@ -69,7 +69,8 @@ final class ClipStore: ObservableObject {
         }
     }
 
-    /// 超过上限时从最旧的未置顶条目开始删
+    /// 超过上限时从最旧的未置顶条目开始删。
+    /// limit < 0 表示无限，不做裁剪；limit == 0 表示暂停记录，也不裁剪（暂停时压根不写入）
     private func trim() {
         let limit = currentMax
         guard limit > 0, items.count > limit else { return }
@@ -122,10 +123,13 @@ final class ClipStore: ObservableObject {
         }.map { $0.element }
     }
 
+    /// 历史上限。-1 = 无限；0 = 暂停记录；其余为条数上限
     var currentMax: Int {
-        let v = UserDefaults.standard.integer(forKey: "maxItems")
-        return v == 0 ? 200 : v
+        UserDefaults.standard.object(forKey: "maxItems") as? Int ?? 200
     }
+
+    /// 是否暂停记录
+    var isPaused: Bool { currentMax == 0 }
 }
 
 // MARK: - 全局快捷键注册（Carbon，稳定且不需要辅助功能权限）
@@ -475,6 +479,8 @@ struct ClipListView: View {
     @ObservedObject var store = ClipStore.shared
     @State private var query: String = ""
     @State private var sel: Int = 0
+    /// 多选集合（存条目 id，避免删除后下标错位）
+    @State private var multiSel: Set<UUID> = []
     @FocusState private var searchFocused: Bool
 
     let onPick: (String) -> Void
@@ -505,7 +511,7 @@ struct ClipListView: View {
             KeyCatcher(
                 onUp: { move(-1) },
                 onDown: { move(1) },
-                onEnter: { pick(sel) },
+                onEnter: { if multiSel.isEmpty { pick(sel) } else { pasteMulti() } },
                 onEsc: { onClose() },
                 onCmd: { n in pick(n) },
                 onDelete: { deleteSelected() }
@@ -517,9 +523,9 @@ struct ClipListView: View {
             // 把操作句柄交给 PanelController，供本地事件监听器调用
             let c = PanelController.shared
             c.moveSelection = { d in sel = (sel + d + max(results.count, 1)) % max(results.count, 1) }
-            c.confirmSelection = { pick(sel) }
+            c.confirmSelection = { if multiSel.isEmpty { pick(sel) } else { pasteMulti() } }
             c.deleteSelection = { deleteSelected() }
-            c.selectAndPaste = { n in pick(n) }
+            c.selectAndPaste = { n in multiSel.removeAll(); pick(n) }
             // 不自动聚焦搜索框：让数字键/方向键直接作用于列表。
             // 用户手动点击搜索框时才开始输入并筛选。
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { searchFocused = false }
@@ -573,10 +579,13 @@ struct ClipListView: View {
                 ScrollView {
                     LazyVStack(spacing: 2) {
                         ForEach(rows, id: \.item.id) { row in
-                            ClipRow(item: row.item, index: row.index, selected: row.index == sel)
+                            ClipRow(item: row.item,
+                                    index: row.index,
+                                    selected: row.index == sel,
+                                    checked: multiSel.contains(row.item.id),
+                                    multiMode: !multiSel.isEmpty)
                                 .contentShape(Rectangle())
-                                // 直接闭包捕获文本，不在点击时回查数组（避免状态失效崩溃）
-                                .onTapGesture { pickText(row.item.text) }
+                                .onTapGesture { handleTap(row) }
                                 .onHover { h in if h { sel = row.index } }
                                 .id(row.item.id)
                         }
@@ -599,9 +608,16 @@ struct ClipListView: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            Text("\(store.items.count) 条")
-            Text("↑↓ 选择 · ⏎ 粘贴 · 1-9 快选 · ⌥⌫ 删除 · Esc 关闭")
-                .lineLimit(1)
+            if multiSel.isEmpty {
+                Text("\(store.items.count) 条")
+                Text("↑↓ 选择 · ⏎ 粘贴 · 1-9 快选 · ⌘点击多选 · ⌥⌫ 删除")
+                    .lineLimit(1)
+            } else {
+                Text("已选 \(multiSel.count) 条")
+                    .foregroundStyle(Color.accentColor)
+                Text("⏎ 合并粘贴 · ⌥⌫ 批量删除 · Esc 取消")
+                    .lineLimit(1)
+            }
             Spacer(minLength: 4)
             Button("清空") { store.clearAll(keepingPinned: true) }
                 .buttonStyle(.plain)
@@ -644,9 +660,50 @@ struct ClipListView: View {
     }
 
     private func deleteSelected() {
+        // 多选模式：批量删除
+        if !multiSel.isEmpty {
+            for item in store.items where multiSel.contains(item.id) {
+                store.remove(item)
+            }
+            multiSel.removeAll()
+            sel = 0
+            return
+        }
         guard results.indices.contains(sel) else { return }
         store.remove(results[sel])
         sel = max(0, min(sel, results.count - 1))
+    }
+
+    /// 点击行为：普通点击 = 直接粘贴；⌘/⇧ 点击 = 多选
+    private func handleTap(_ row: (index: Int, item: ClipItem)) {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.command) || flags.contains(.shift) {
+            // 切换勾选
+            if multiSel.contains(row.item.id) {
+                multiSel.remove(row.item.id)
+            } else {
+                multiSel.insert(row.item.id)
+            }
+            sel = row.index
+            return
+        }
+        // 多选模式下的普通点击也算勾选（避免误粘贴）
+        if !multiSel.isEmpty {
+            if multiSel.contains(row.item.id) {
+                multiSel.remove(row.item.id)
+            } else {
+                multiSel.insert(row.item.id)
+            }
+            return
+        }
+        pickText(row.item.text)
+    }
+
+    /// 批量粘贴：按列表顺序，用换行拼接
+    private func pasteMulti() {
+        let ordered = results.filter { multiSel.contains($0.id) }.map(\.text)
+        guard !ordered.isEmpty else { return }
+        pickText(ordered.joined(separator: "\n"))
     }
 
     private func openSettings() {
@@ -658,6 +715,8 @@ struct ClipRow: View {
     let item: ClipItem
     let index: Int
     let selected: Bool
+    var checked: Bool = false
+    var multiMode: Bool = false
 
     private var preview: String {
         let t = item.text.replacingOccurrences(of: "\r", with: " ")
@@ -672,10 +731,17 @@ struct ClipRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text("\(index + 1)")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(selected ? Color.white.opacity(0.75) : Color.secondary.opacity(0.55))
-                .frame(width: 18, alignment: .trailing)
+            if multiMode {
+                Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(checked ? Color.accentColor : Color.secondary.opacity(0.5))
+                    .frame(width: 16)
+            } else {
+                Text("\(index + 1)")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(selected ? Color.white.opacity(0.75) : Color.secondary.opacity(0.55))
+                    .frame(width: 18, alignment: .trailing)
+            }
 
             Image(systemName: isLink ? "link" : "doc.text")
                 .font(.system(size: 11))
@@ -699,7 +765,8 @@ struct ClipRow: View {
         .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(selected ? Color.accentColor : Color.clear)
+                .fill(checked ? Color.accentColor.opacity(0.18)
+                      : selected ? Color.accentColor : Color.clear)
         )
     }
 }
@@ -855,7 +922,7 @@ final class SettingsWindowController {
 }
 
 struct SettingsView: View {
-    @AppStorage("maxItems") private var maxItems: Int = 200
+    @AppStorage("maxItems") private var maxItems: Int = -1
     @AppStorage("pasteRestore") private var pasteRestore: Bool = true
     @State private var launchAtLogin: Bool = false
     @State private var saved = false
@@ -863,14 +930,24 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("最多保留条数") {
-                HStack {
-                    TextField("条数", value: $maxItems, format: .number)
-                        .frame(width: 80)
-                    Text("条（置顶条目不受限制）").foregroundStyle(.secondary)
+                Picker("", selection: $maxItems) {
+                    Text("无限").tag(-1)
+                    Text("100 条").tag(100)
+                    Text("200 条").tag(200)
+                    Text("500 条").tag(500)
+                    Text("1000 条").tag(1000)
+                    Text("暂停记录").tag(0)
                 }
-                Text("0 = 暂停记录。含密码/敏感信息建议调小。")
+                .pickerStyle(.menu)
+                .labelsHidden()
+                Text(maxItems == -1
+                     ? "不自动清理，历史会一直累积。磁盘占用很小（纯文本），但列表会变长。"
+                     : maxItems == 0
+                     ? "暂停记录新内容，已有历史保留。"
+                     : "超出后自动删除最旧的未置顶条目。置顶条目不计入上限。")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Section("粘贴行为") {
                 Toggle("粘贴后还原剪贴板内容", isOn: $pasteRestore)
@@ -1059,6 +1136,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set(true, forKey: "didInitLaunchAtLogin")
             LaunchAtLogin.set(true)
             NSLog("ClipStack: 首次启动，已尝试开启开机自启 -> \(LaunchAtLogin.statusText)")
+        }
+
+        // v1.2 迁移：老版本 maxItems 只能是正数（默认 200），
+        // 升级后统一切到「无限」，除非用户主动改过
+        if !UserDefaults.standard.bool(forKey: "didMigrateUnlimited") {
+            UserDefaults.standard.set(true, forKey: "didMigrateUnlimited")
+            UserDefaults.standard.set(-1, forKey: "maxItems")
+            NSLog("ClipStack: 已迁移到无限历史")
         }
 
         NSLog("ClipStack: 启动完成, hotkey id=\(hotkeyID)")
