@@ -600,7 +600,7 @@ struct ClipListView: View {
     private var footer: some View {
         HStack(spacing: 12) {
             Text("\(store.items.count) 条")
-            Text("↑↓ 选择 · ⏎ 粘贴 · ⌘1-9 快选 · ⌥⌫ 删除 · Esc 关闭")
+            Text("↑↓ 选择 · ⏎ 粘贴 · 1-9 快选 · ⌥⌫ 删除 · Esc 关闭")
                 .lineLimit(1)
             Spacer(minLength: 4)
             Button("清空") { store.clearAll(keepingPinned: true) }
