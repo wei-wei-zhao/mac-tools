@@ -23,6 +23,8 @@ macOS 上两个纯本地小工具，不联网、不登录、不上传任何数�
 
 自研 macOS 剪贴板历史管理器，替代 [Maccy](https://github.com/p0deje/Maccy)。单文件 Swift 实现，不需要 Xcode 工程。
 
+<img src="docs/images/clipstack-panel.png" width="620" alt="ClipStack 面板截图">
+
 ### 快捷键
 
 | 操作 | 快捷键 |
