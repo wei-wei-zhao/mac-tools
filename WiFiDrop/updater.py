@@ -117,7 +117,8 @@ def config_file() -> Path:
 
 # 发布时预置的更新地址（打包前由 release.py 自动填入）
 # 用户端无需配置，开箱即用；用户也可在菜单里改成自己的地址
-BUILTIN_UPDATE_URL = "http://TaldeMacBook-Air.local:8790/version.json"
+# 留空表示不预置：用户首次使用时在「更新设置…」里填自己的地址即可
+BUILTIN_UPDATE_URL = ""
 # 回退地址：主机名（.local）解析失败时改试这个（通常是 IP 版地址）
 BUILTIN_UPDATE_URL_FALLBACK = ""
 
