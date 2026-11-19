@@ -2,6 +2,10 @@
 //  MaccyImport.swift
 //  从 Maccy 导入剪贴板历史
 //
+//  声明：本模块仅读取用户本机已安装的第三方软件 Maccy 所生成的数据文件，
+//  未使用、未复制其任何源代码。产品名称仅用于说明数据来源，属于指示性使用。
+//  Maccy 是其各自权利人的商标，本项目与 Maccy 官方无任何关联或背书关系。
+//
 //  Maccy 用 SwiftData（底层 CoreData，存储为 SQLite）：
 //    ~/Library/Application Support/Maccy/Storage.sqlite
 //
